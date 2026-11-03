@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Campus Chat</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/socket.io/socket.io.js" defer></script>
+  <script src="/client.js" defer></script>
+</head>
+<body>
+  <section id="login-screen" class="login-screen">
+    <form id="login-form" class="login-card">
+      <div class="logo">C</div><p class="eyebrow">COMPUTER NETWORK PROJECT</p>
+      <h1>Campus Chat</h1><p>A little closer, in real time.</p>
+      <label for="name-input">Your name</label>
+      <input id="name-input" autocomplete="nickname" placeholder="Choose a unique name" required>
+      <small>Up to 20 characters. Names are reserved while online.</small>
+      <button id="login-button" type="submit">Connect to chat →</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+  </section>
+  <div id="chat-app" class="app" hidden>
+    <aside class="sidebar">
+      <header class="brand"><span class="logo">C</span><strong>Campus Chat</strong></header>
+      <div class="identity"><span class="status-dot"></span><span id="my-name"></span></div>
+      <section><h2>Online users <span id="user-count"></span></h2><ul id="users"></ul></section>
+      <section><h2>Groups</h2><ul id="groups"></ul>
+        <form id="group-form" class="create-group">
+          <label class="sr-only" for="group-input">New group name</label>
+          <input id="group-input" maxlength="60" placeholder="New group name" required>
+          <button type="submit" aria-label="Create group">+</button>
+        </form>
+      </section>
+      <p class="sidebar-note">Join a group to read and send messages.<br>In a group, ask a question with @ai.</p>
+    </aside>
+    <main class="main">
+      <header class="room-header">
+        <div><p class="eyebrow" id="room-kind">YOUR CONVERSATIONS</p><h1 id="room-title">Welcome to Campus Chat</h1></div>
+        <button id="summarize" class="secondary" disabled>✨ Summarize</button>
+      </header>
+      <p id="app-error" class="error app-error" role="alert"></p>
+      <div id="messages" class="messages" role="log" aria-live="polite"><p class="empty">Choose someone online or join a group to start chatting.</p></div>
+      <p id="typing-indicator" class="typing" aria-live="polite"></p>
+      <form id="message-form" class="composer">
+        <label class="sr-only" for="message-input">Message</label>
+        <input id="message-input" maxlength="4000" placeholder="Write a message…" autocomplete="off" disabled>
+        <button id="send-button" type="submit" disabled>Send →</button>
+      </form>
+    </main>
+  </div>
+</body>
+</html>

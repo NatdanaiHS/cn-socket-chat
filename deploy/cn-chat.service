@@ -1,0 +1,21 @@
+[Unit]
+Description=CN Socket Chat
+After=network.target
+
+[Service]
+Type=simple
+User=cnchat
+Group=cnchat
+WorkingDirectory=/opt/cn-chat
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=3100
+EnvironmentFile=/etc/cn-chat.env
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
