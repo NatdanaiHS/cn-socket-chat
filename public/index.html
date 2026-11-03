@@ -13,18 +13,25 @@
     <form id="login-form" class="login-card">
       <div class="logo">C</div><p class="eyebrow">COMPUTER NETWORK PROJECT</p>
       <h1>Campus Chat</h1><p>A little closer, in real time.</p>
-      <label for="name-input">Your name</label>
-      <input id="name-input" autocomplete="nickname" placeholder="Choose a unique name" required>
-      <small>Up to 20 characters. Names are reserved while online.</small>
-      <button id="login-button" type="submit">Connect to chat →</button>
+      <div class="auth-modes"><button id="login-mode" type="button" aria-pressed="true">Log in</button><button id="register-mode" type="button" aria-pressed="false">Create account</button></div>
+      <label for="name-input">Username</label>
+      <input id="name-input" autocomplete="username" placeholder="Your username" required>
+      <small>1–20 characters, without | or control characters.</small>
+      <label for="password-input">Password</label>
+      <input id="password-input" type="password" autocomplete="current-password" required>
+      <small>6–72 characters.</small>
+      <label id="confirm-label" for="confirm-input" hidden>Confirm password</label>
+      <input id="confirm-input" type="password" autocomplete="new-password" hidden>
+      <button id="login-button" type="submit">Log in →</button>
       <p id="login-error" class="error" role="alert"></p>
     </form>
   </section>
   <div id="chat-app" class="app" hidden>
     <aside class="sidebar">
       <header class="brand"><span class="logo">C</span><strong>Campus Chat</strong></header>
-      <div class="identity"><span class="status-dot"></span><span id="my-name"></span></div>
+      <div class="identity"><span class="status-dot"></span><span id="my-name"></span><button id="logout-button" class="small-button" type="button">Log out</button></div>
       <section><h2>Online users <span id="user-count"></span></h2><ul id="users"></ul></section>
+      <section><h2>Offline conversations</h2><ul id="offline-dms"></ul></section>
       <section><h2>Groups</h2><ul id="groups"></ul>
         <form id="group-form" class="create-group">
           <label class="sr-only" for="group-input">New group name</label>

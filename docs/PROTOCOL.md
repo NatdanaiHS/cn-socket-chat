@@ -1,50 +1,77 @@
 # Socket event protocol
 
-All chat requests use Socket.IO's default path, /socket.io. Express serves static
-files only. C → S means client to server; S → C means server to client.
-Application requests accept an object and an optional Socket.IO acknowledgement
-callback. Acknowledgements always return { ok: true, ...result } on success or
-{ ok: false, error: string } on failure. The browser supplies callbacks for actions;
-typing is sent without one. Every request except login requires login.
+All application requests use Socket.IO's default path, /socket.io. Express serves
+static files only; there are no REST authentication endpoints. C → S means client
+to server; S → C means server to client. Requests accept an object and an optional
+acknowledgement callback: { ok: true, ...result } or { ok: false, error: string }.
+Every request except register, login and resume requires an authenticated socket.
 
 | Event | Direction | Payload / success acknowledgement |
 | --- | --- | --- |
-| connection | Socket.IO → server | Built-in: a connected socket; registers handlers, but does not reserve a name. |
-| connect | Socket.IO → client | Built-in, no payload: transport connected; login is still required. |
+| connection | Socket.IO → server | Built-in: registers handlers; does not authenticate. |
+| connect | Socket.IO → client | Built-in: transport connected. Browser sends resume if localStorage contains a token. |
 | connect_error | Socket.IO → client | Built-in Error: browser shows a connection error. |
-| login | C → S | { name: string }; ack { ok, name, users: string[], groups: Group[] }. Trims names, rejects empty, over 20 Unicode characters, case-insensitive duplicates, pipe delimiter and control characters. |
-| users_update | S → C | string[] of all logged-in online names, including the recipient. Sent to logged-in clients after login/disconnect. |
-| groups_update | S → C | Group[] of every existing group and its member names. Sent after login/create/join/leave/disconnect. Metadata is public to logged-in clients; message contents are restricted. |
-| room_open | C → S | Private: { target: exactDisplayName }, or existing permitted room: { roomId }. Ack { ok, roomId, messages: Message[] }. Only a private participant or current group member can get history. |
-| group_create | C → S | { name: string }; ack { ok, roomId }. Trimmed, unique case-insensitively, 1–60 Unicode characters, no control characters. Only creator joins. Other fields cannot add members. |
-| group_join | C → S | { roomId }; ack { ok, roomId }. Only the requesting socket joins; no target/member field is accepted. |
-| group_leave | C → S | { roomId }; ack { ok, roomId }. Removes requesting member from group and Socket.IO room; deletes empty groups and their history. |
-| message_send | C → S | { roomId, text: string }; ack { ok }. Text trimmed, 1–4000 UTF-16 code units. Server validates room access; DM target must be online. Group messages starting with "@ai " also request an AI answer. |
-| message_new | S → C | Message. A DM goes only to sender and receiver socket ids; a group message goes only to Socket.IO room members. AI group replies use sender "AI Bot" and kind "ai". |
-| typing | C → S | { roomId, typing: boolean }; ack { ok } if supplied. Server checks room access and excludes sender from delivery. |
-| typing_update | S → C | { roomId, name: string, typing: boolean }. Delivered using message privacy rules, excluding sender. False sent on message, leave, disconnect; browser expires stale indicators after 2.5s. |
-| ai_summarize | C → S | { roomId }; ack { ok, roomId, text: string }. Uses last 50 messages. Summary returned only through requester's ack, displayed locally as an AI message. Error ack for empty history, missing key, timeout, API failure or lost room access. |
-| disconnect | Socket.IO → both | Built-in reason string; server removes name and memberships, deletes empty groups and affected DM histories, broadcasts lists. Browser clears session and returns to login. |
+| register | C → S | { username, password }; ack AuthResult. Username is trimmed, 1–20 Unicode characters, unique case-insensitively, without pipe or control characters. Password is 6–72 Unicode characters, without trimming. Creates account and logs in. Browser confirms password before sending. |
+| login | C → S | { username, password }; ack AuthResult. Username matching ignores case and surrounding whitespace; response uses saved spelling. Wrong username/password both return "Incorrect username or password". At most 5 failed attempts per username in 5 minutes; subsequent attempts get a friendly wait error. Successful login resets failures. |
+| resume | C → S | { token }; ack AuthResult, keeping the same token and expiry. Missing, invalid or expired token requires login again. Restores all persistent group room subscriptions. |
+| logout | C → S | {}; ack { ok }. Deletes this session, removes presence and Socket.IO group subscriptions; account, memberships and history remain. Browser clears localStorage and returns to login. |
+| kicked | S → C | { message: "Logged in from another place" }, followed by transport disconnect. New login/resume wins over the old socket. Browser clears its credential and returns to login; explicit login can reconnect. |
+| users_update | S → C | string[] of currently connected account usernames, including the recipient. Sent after login/resume/logout/disconnect. |
+| groups_update | S → C | Group[] of every existing group and all persistent members, with onlineMembers for presence. Sent after login/resume/create/join/leave/logout/disconnect. Metadata is visible to authenticated users; contents are restricted. |
+| room_open | C → S | { target: username } for a DM, or { roomId } for existing permitted history. Ack { ok, roomId, messages: Message[] }. New DMs require an online target; existing DMs may be opened while the target is offline. Only participants or group members can get history. Clears requester's persisted unread count. |
+| room_read | C → S | { roomId }; ack { ok } if supplied. Checks access, then clears persisted unread count. Browser sends this when a message arrives in its active room. |
+| group_create | C → S | { name }; ack { ok, roomId }. Trimmed, unique case-insensitively, 1–60 Unicode characters, no control characters. Saves creator username; joins only creator. Other fields cannot add members. |
+| group_join | C → S | { roomId }; ack { ok, roomId }. Adds requesting username and subscribes its socket. No target/member field is accepted. |
+| group_leave | C → S | { roomId }; ack { ok, roomId }. Removes requesting username and socket subscription; clears unread count. Only the final member leaving deletes a group and its history. |
+| message_send | C → S | { roomId, text }; ack { ok }. Trimmed text, 1–4000 UTF-16 code units. Validates access; offline DM recipients are allowed. Group messages starting with "@ai " also request an AI answer. |
+| message_new | S → C | Message. DMs go only to connected participant sockets; group messages only to subscribed members. Saved before delivery, including when recipients are offline. AI group replies use sender "AI Bot" and kind "ai". |
+| typing | C → S | { roomId, typing: boolean }; ack { ok } if supplied. Checks access; excludes sender. |
+| typing_update | S → C | { roomId, name, typing: boolean }. Same privacy rules as messages, excluding sender. False on message, leave, logout, disconnect; browser expires stale indicators after 2.5s. |
+| ai_summarize | C → S | { roomId }; ack { ok, roomId, text }. Uses last 50 messages, returned only to requester and displayed locally. Errors for empty history, missing key, timeout, API failure or lost access. |
+| disconnect | Socket.IO → both | Built-in reason string. Removes online presence and transient typing only. Memberships, sessions and histories remain. Browser hides chat and automatically resumes on reconnect. A server kick stops automatic reconnection. |
 
-Group = { roomId: string, name: string, members: string[] }.
+AuthResult = { ok: true, name: string, token: string, users: string[],
+groups: Group[], directRooms: { roomId, target }[], unread: { [roomId]: count } }.
+Only this account's DM metadata and unread counts are included.
+
+Group = { roomId: string, name: string, creator: string, members: string[],
+onlineMembers: string[] }. Members includes offline users; onlineMembers is a subset.
 
 Message = { id: UUID string, roomId: string, sender: string, text: string,
 time: ISO-8601 string, kind: "chat" | "ai" }.
 
-Private ids are "dm:" + [name1, name2].sort().join("|"), using JavaScript's
-default case-sensitive sort of the exact registered display names. Group ids are
-"group:" + trimmedGroupName. The pipe is reserved in user names to prevent room
-id collisions. Room history is held in memory and capped at 200 messages.
-Group members may see existing group history when joining; non-members may not.
-DM history is deleted when either user disconnects because names are temporary
-session identities, with no passwords or persistent accounts.
+DM ids are "dm:" + [username1, username2].sort().join("|"), using JavaScript's
+case-sensitive sort of canonical registered names. Group ids are "group:" +
+trimmedGroupName. Pipe is reserved in usernames to prevent room id collisions.
+DM histories survive disconnect, logout and restart. Group members may see existing
+history when joining; non-members may not. No add-member/invite handler exists.
 
-Room switching fetches history again. Incoming messages for inactive rooms increment
-local unread badges; opening that room resets its badge. Own messages are echoed by
-the server, so the client never creates duplicate optimistic messages.
-Unexpected or unsupported events (including any add-member event) have no handlers.
+## Credentials and storage
 
-Gemini requests use global fetch, an x-goog-api-key header, and a 20-second timeout.
-The group AI response arrives separately after the human-message acknowledgement.
-The server verifies the original group still exists before delivering an answer.
-Summary access and room identity are checked again after awaiting Gemini.
+Passwords use node:crypto scrypt with a random 16-byte salt and 64-byte key.
+Salt and key are stored as hex; verification uses timingSafeEqual. Plain passwords
+are never stored or logged. Tokens are randomBytes(32).toString('base64url'); only
+a SHA-256 hash plus username and a fixed 7-day expiry is stored server-side.
+Fresh credential login invalidates older tokens for that account. Resume keeps
+its expiry and displaces the previous socket. The browser stores the raw token in
+localStorage under campus-chat-token. Tabs share localStorage, so opening another
+tab normally resumes the same account and kicks the previous tab.
+
+DATA_FILE (default ./data/chat-data.json, relative to the working directory)
+contains accounts, hashed sessions, groups, DM participant metadata, per-room
+history (last 200 messages), and per-account unread counts. Startup loads it;
+expired sessions are ignored. Mutations schedule a save after 500ms of inactivity.
+Writes use a temporary file in the same directory and atomic rename. Server close,
+SIGINT and SIGTERM flush pending state. A missing file starts empty; malformed or
+unreadable saved data fails startup. A single server process owns a data file.
+
+Room switching fetches history again and clears the badge. Incoming messages for
+inactive rooms increment badges; persisted counts restore after reconnect/restart,
+including offline delivery. Own human messages do not increment unread counts.
+The server echoes own messages, avoiding duplicate optimistic messages. Typing and
+local AI summaries are transient, and summaries are visible only to their requester.
+
+Gemini uses global fetch, an x-goog-api-key header and a 20-second timeout.
+Group AI replies arrive separately after human-message acknowledgement. The server
+checks that the original group still exists before delivery. Summary access and
+room identity are checked again after awaiting Gemini.

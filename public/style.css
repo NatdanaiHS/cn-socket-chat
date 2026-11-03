@@ -74,3 +74,8 @@ ul { list-style: none; padding: 0; margin: 0; }
 
 /* The hidden attribute must win over component display rules. */
 [hidden] { display: none !important; }
+
+.auth-modes { display: flex; gap: 8px; }
+.identity #my-name { flex: 1; }
+/* The selected login/create-account tab is filled; the other one is light. */
+.auth-modes button[aria-pressed="false"] { background: #eef1ff; color: #3b5bdb; box-shadow: none; }

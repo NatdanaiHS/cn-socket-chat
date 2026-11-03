@@ -4,6 +4,16 @@ const $ = id => document.getElementById(id);
 let myName = '';
 let users = [];
 let groups = [];
+let directRooms = [];
+let creatingAccount = false;
+let sessionToken = '';
+let explicitLogin = false;
+const tokenStorageKey = 'campus-chat-token';
+// Private browsing may disable storage; chat still works for the current page.
+function storedToken() { try { return localStorage.getItem(tokenStorageKey) || ''; } catch { return ''; } }
+function storeToken(token) {
+  try { if (token) localStorage.setItem(tokenStorageKey, token); else localStorage.removeItem(tokenStorageKey); } catch {}
+}
 let activeRoom = null; // { roomId, title, kind }
 let openingVersion = 0; // Ignore an old room_open acknowledgement after a newer click.
 let typingTimer;
@@ -17,7 +27,11 @@ function request(event, payload) {
   return new Promise((resolve, reject) => {
     socket.timeout(event === 'ai_summarize' ? 25000 : 5000)
       .emit(event, payload, (error, result) => {
-        if (error) reject(new Error('Connection timed out. Please try again.'));
+        if (error) {
+          const timeout = new Error('Connection timed out. Please try again.');
+          timeout.requestTimeout = true;
+          reject(timeout);
+        }
         else if (!result.ok) reject(new Error(result.error));
         else resolve(result);
       });
@@ -58,6 +72,19 @@ function renderLists() {
     li.append(button);
     $('users').append(li);
   }
+  $('offline-dms').replaceChildren();
+  for (const room of directRooms.filter(room => !users.includes(room.target))) {
+    const li = element('li');
+    const button = element('button', 'list-button', room.target + ' (offline)');
+    const count = badge(room.roomId);
+    if (count) button.append(count);
+    button.onclick = () => openRoom({ roomId: room.roomId }, room.target, 'private');
+    li.append(button);
+    $('offline-dms').append(li);
+  }
+  if (activeRoom?.kind === 'private') {
+    $('room-title').textContent = activeRoom.title + (users.includes(activeRoom.title) ? '' : ' (offline)');
+  }
   $('groups').replaceChildren();
   for (const group of groups) {
     const joined = group.members.includes(myName);
@@ -77,7 +104,7 @@ function renderLists() {
       } catch (error) { showError(error); }
     };
     row.append(button, action);
-    li.append(row, element('p', 'members', group.members.join(', ')));
+    li.append(row, element('p', 'members', group.members.map(name => name + (group.onlineMembers.includes(name) ? ' (online)' : ' (offline)')).join(', ')));
     $('groups').append(li);
   }
 }
@@ -89,6 +116,9 @@ async function openRoom(payload, title, kind) {
     if (version !== openingVersion) return;
     activeRoom = { roomId: result.roomId, title, kind };
     histories.set(result.roomId, result.messages);
+    if (kind === 'private' && !directRooms.some(room => room.roomId === result.roomId)) {
+      directRooms.push({ roomId: result.roomId, target: title });
+    }
     unread.delete(result.roomId);
     $('room-title').textContent = title;
     $('room-kind').textContent = kind === 'group' ? 'GROUP CONVERSATION' : 'PRIVATE CONVERSATION';
@@ -132,21 +162,65 @@ function stopTyping() {
   lastTypingSent = 0;
   if (activeRoom && socket.connected) socket.emit('typing', { roomId: activeRoom.roomId, typing: false });
 }
+function setAuthMode(create) {
+  creatingAccount = create;
+  $('confirm-label').hidden = $('confirm-input').hidden = !create;
+  $('confirm-input').required = create;
+  $('password-input').autocomplete = create ? 'new-password' : 'current-password';
+  $('login-mode').setAttribute('aria-pressed', String(!create));
+  $('register-mode').setAttribute('aria-pressed', String(create));
+  $('login-button').textContent = create ? 'Create account →' : 'Log in →';
+  $('login-error').textContent = '';
+}
+$('login-mode').onclick = () => setAuthMode(false);
+$('register-mode').onclick = () => setAuthMode(true);
+function signedIn(result) {
+  sessionToken = result.token;
+  storeToken(sessionToken);
+  myName = result.name;
+  users = result.users;
+  groups = result.groups;
+  directRooms = result.directRooms;
+  unread.clear();
+  for (const [roomId, count] of Object.entries(result.unread)) unread.set(roomId, count);
+  $('password-input').value = $('confirm-input').value = '';
+  $('my-name').textContent = myName;
+  $('login-screen').hidden = true;
+  $('chat-app').hidden = false;
+  renderLists();
+}
+function signedOut(message) {
+  clearRoom();
+  myName = ''; users = []; groups = []; directRooms = [];
+  histories.clear(); summaries.clear(); unread.clear(); typers.clear();
+  $('chat-app').hidden = true;
+  $('login-screen').hidden = false;
+  $('login-error').textContent = message;
+}
 $('login-form').onsubmit = async event => {
   event.preventDefault();
   $('login-button').disabled = true;
   $('login-error').textContent = '';
   try {
-    const result = await request('login', { name: $('name-input').value });
-    myName = result.name;
-    users = result.users;
-    groups = result.groups;
-    $('my-name').textContent = myName;
-    $('login-screen').hidden = true;
-    $('chat-app').hidden = false;
-    renderLists();
+    if (creatingAccount && $('password-input').value !== $('confirm-input').value) {
+      throw new Error('Passwords do not match.');
+    }
+    // A server kick stops automatic reconnection; an explicit login starts it again.
+    explicitLogin = true;
+    if (!socket.connected) socket.connect();
+    const result = await request(creatingAccount ? 'register' : 'login', {
+      username: $('name-input').value, password: $('password-input').value
+    });
+    signedIn(result);
   } catch (error) { $('login-error').textContent = error.message; }
-  finally { $('login-button').disabled = false; }
+  finally { explicitLogin = false; $('login-button').disabled = false; }
+};
+$('logout-button').onclick = async () => {
+  try {
+    await request('logout', {});
+    storeToken(''); sessionToken = '';
+    signedOut('You have logged out.');
+  } catch (error) { showError(error); }
 };
 $('group-form').onsubmit = async event => {
   event.preventDefault();
@@ -191,16 +265,9 @@ $('summarize').onclick = async () => {
   } catch (error) { showError(error); }
   finally { $('summarize').disabled = !activeRoom; }
 };
-// Presence changes refresh the sidebar and remove expired private-session caches.
+// Presence changes never discard account-owned DM histories.
 socket.on('users_update', list => {
   users = list;
-  if (myName && activeRoom?.kind === 'private' && !users.includes(activeRoom.title)) clearRoom();
-  // Discard cached private conversations when a participant goes offline.
-  for (const roomId of histories.keys()) {
-    if (roomId.startsWith('dm:') && !roomId.slice(3).split('|').every(n => users.includes(n))) {
-      histories.delete(roomId); summaries.delete(roomId); unread.delete(roomId); typers.delete(roomId);
-    }
-  }
   renderLists();
 });
 // Membership metadata is visible to everyone; cached messages require membership.
@@ -219,9 +286,18 @@ socket.on('message_new', message => {
   const history = histories.get(message.roomId) || [];
   if (history.some(m => m.id === message.id)) return;
   histories.set(message.roomId, [...history, message].slice(-200));
-  if (activeRoom?.roomId === message.roomId) renderMessages();
+  if (message.roomId.startsWith('dm:') && !directRooms.some(room => room.roomId === message.roomId)) {
+    const target = message.roomId.slice(3).split('|').find(name => name !== myName);
+    directRooms.push({ roomId: message.roomId, target });
+  }
+  if (activeRoom?.roomId === message.roomId) {
+    socket.emit('room_read', { roomId: message.roomId });
+    renderMessages();
+  }
   else {
-    unread.set(message.roomId, (unread.get(message.roomId) || 0) + 1);
+    if (message.sender !== myName || message.kind !== 'chat') {
+      unread.set(message.roomId, (unread.get(message.roomId) || 0) + 1);
+    }
     renderLists();
   }
 });
@@ -234,14 +310,27 @@ socket.on('typing_update', ({ roomId, name, typing }) => {
   renderTyping();
 });
 setInterval(renderTyping, 500);
-// A reconnection has a new temporary identity and must go through login again.
+// Reconnect with the saved credential; a transport disconnect keeps it intact.
+socket.on('connect', async () => {
+  const token = storedToken();
+  if (!token || explicitLogin) return;
+  $('login-button').disabled = true;
+  sessionToken = token;
+  try { signedIn(await request('resume', { token })); }
+  catch (error) {
+    // A network interruption does not revoke the saved server-side session.
+    if (!error.requestTimeout) { storeToken(''); sessionToken = ''; }
+    signedOut(error.message);
+  }
+  finally { $('login-button').disabled = false; }
+});
+socket.on('kicked', ({ message }) => {
+  if (storedToken() === sessionToken) storeToken('');
+  sessionToken = '';
+  signedOut(message);
+});
 socket.on('disconnect', () => {
-  clearRoom();
-  myName = ''; users = []; groups = [];
-  histories.clear(); summaries.clear(); unread.clear(); typers.clear();
-  $('chat-app').hidden = true;
-  $('login-screen').hidden = false;
-  $('login-error').textContent = 'Disconnected. Reconnect with your name when the server is available.';
+  signedOut(sessionToken ? 'Disconnected. Reconnecting automatically…' : $('login-error').textContent);
 });
 socket.on('connect_error', () => {
   $('login-error').textContent = 'Cannot reach the server. Check your connection.';

@@ -10,6 +10,8 @@ WorkingDirectory=/opt/cn-chat
 Environment=NODE_ENV=production
 Environment=HOST=127.0.0.1
 Environment=PORT=3100
+Environment=DATA_FILE=/var/lib/cn-chat/chat-data.json
+StateDirectory=cn-chat
 EnvironmentFile=/etc/cn-chat.env
 ExecStart=/usr/bin/node server.js
 Restart=always
