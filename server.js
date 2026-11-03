@@ -162,7 +162,7 @@ function createChatServer(options = {}) {
     if (event === 'message_new') {
       const recipients = groups.get(roomId)?.members || directRooms.get(roomId) || [];
       for (const name of recipients) {
-        if (name === payload.sender && ['chat', 'file'].includes(payload.kind)) continue;
+        if (name === payload.sender) continue;
         const account = accountFor(name);
         account.unread ||= {};
         account.unread[roomId] = (account.unread[roomId] || 0) + 1;
@@ -419,14 +419,20 @@ function createChatServer(options = {}) {
       if (text.length > 4000) throw new Error('Messages must be at most 4000 characters.');
       deliver(roomId, 'message_new', saveMessage(roomId, users.get(socket.id), text));
       deliver(roomId, 'typing_update', { roomId, name: users.get(socket.id), typing: false }, socket.id);
-      if (groups.has(roomId) && text.startsWith('@ai ')) {
-        const originalGroup = groups.get(roomId);
+      // "@ai question" works in groups and DMs (any letter case); the answer goes to the same room only.
+      const aiCommand = /^@ai(?:\s+([\s\S]*))?$/i.exec(text);
+      if (aiCommand) {
+        const question = (aiCommand[1] || '').trim();
+        const originalRoom = groups.get(roomId) || directRooms.get(roomId);
         // Acknowledge immediately; the AI response arrives as a separate message.
         void (async () => {
           let answer;
-          try { answer = await askGemini(text.slice(4)); }
-          catch (error) { answer = aiError(error); }
-          if (groups.get(roomId) === originalGroup) {
+          if (!question) answer = 'Type @ai followed by a question, e.g. "@ai what is the difference between TCP and UDP?"';
+          else {
+            try { answer = await askGemini(question); }
+            catch (error) { answer = aiError(error); }
+          }
+          if ((groups.get(roomId) || directRooms.get(roomId)) === originalRoom) {
             deliver(roomId, 'message_new', saveMessage(roomId, 'AI Bot', answer, 'ai'));
           }
         })();

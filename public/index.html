@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="color-scheme" content="light dark"><title>WongChat</title>
   <link rel="icon" href="data:,">
   <script>
@@ -15,51 +15,52 @@
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/style.css">
   <script src="/socket.io/socket.io.js" defer></script>
   <script src="/client.js" defer></script>
 </head>
 <body>
   <section id="login-screen" class="login-screen">
-    <aside class="brand-panel"><span class="logo">W</span><p class="eyebrow">YOUR CAMPUS, CONNECTED</p><h1>Good conversations.<br>Great connections.</h1><p>A little closer, in real time.</p><div class="brand-art" aria-hidden="true">💬<span>✨</span></div><p>Private chats • Groups • AI summary • File sharing</p></aside>
+    <aside class="brand-panel"><span class="logo">W</span><p class="eyebrow">YOUR CAMPUS, CONNECTED</p><h1>Good conversations.<br>Great connections.</h1><p>A little closer, in real time.</p><div class="brand-art" data-icon="chat" aria-hidden="true"></div><p>Private chats • Groups • AI summary • File sharing</p></aside>
     <form id="login-form" class="login-card">
       <span class="logo">W</span><h1>Welcome to WongChat</h1><p class="muted">Your people are one hello away.</p>
       <div class="auth-modes"><button id="login-mode" type="button" aria-pressed="true">Log in</button><button id="register-mode" type="button" aria-pressed="false">Create account</button></div>
       <label for="name-input">Username</label><input id="name-input" autocomplete="username" placeholder="Your username" required><small>1–20 characters, without | or control characters.</small>
-      <label for="password-input">Password</label><div class="password-field"><input id="password-input" type="password" autocomplete="current-password" required><button id="password-toggle" class="icon-button" type="button" aria-label="Show password" aria-pressed="false">◉</button></div><small>6–72 characters.</small>
+      <label for="password-input">Password</label><div class="password-field"><input id="password-input" type="password" autocomplete="current-password" required><button id="password-toggle" class="icon-button" type="button" aria-label="Show password" aria-pressed="false" data-icon="eye"></button></div><small>6–72 characters.</small>
       <label id="confirm-label" for="confirm-input" hidden>Confirm password</label><input id="confirm-input" type="password" autocomplete="new-password" hidden>
-      <button id="login-button" type="submit">Log in →</button><p id="login-error" class="error" role="alert"></p>
-      <div class="theme-control" aria-label="Colour theme"><button type="button" data-theme-choice="light" aria-label="Light theme">☀</button><button type="button" data-theme-choice="dark" aria-label="Dark theme">☾</button><button type="button" data-theme-choice="system" aria-label="System theme">▣</button></div>
+      <button id="login-button" type="submit">Log in</button><p id="login-error" class="error" role="alert"></p>
+      <div class="theme-control" aria-label="Colour theme"><button type="button" data-theme-choice="light" aria-label="Light theme"></button><button type="button" data-theme-choice="dark" aria-label="Dark theme"></button><button type="button" data-theme-choice="system" aria-label="System theme"></button></div>
     </form>
   </section>
   <div id="chat-app" class="app" hidden>
     <aside class="sidebar">
-      <header class="brand"><span class="logo">W</span><strong>WongChat</strong><span class="live-label">LIVE</span></header>
-      <div class="identity"><button id="edit-profile" class="identity-button" aria-label="Edit profile"><span id="my-avatar"></span><span><strong id="my-name"></strong><small>Edit profile ↗</small></span></button><button id="logout-button" class="icon-button" aria-label="Log out" title="Log out">↪</button></div>
-      <label class="sr-only" for="sidebar-search">Search conversations</label><input id="sidebar-search" type="search" placeholder="⌕  Search people & groups">
+      <header class="brand"><span class="logo">W</span><strong>WongChat</strong><button id="create-group-button" class="icon-button" aria-label="Create group" data-icon="plus"></button><button id="me-button" class="avatar-button" aria-label="Open Me"><span id="my-avatar"></span></button></header>
+      <label class="sr-only" for="sidebar-search">Search conversations</label><input id="sidebar-search" type="search" placeholder="Search people & groups">
       <div class="conversation-lists">
-        <section><h2>Online <span id="user-count"></span></h2><ul id="users"></ul></section>
-        <section><h2>Direct messages</h2><ul id="direct-messages"></ul></section>
-        <section><h2>Groups <span>＋</span></h2><ul id="groups"></ul><form id="group-form" class="create-group"><label class="sr-only" for="group-input">New group name</label><input id="group-input" maxlength="60" placeholder="Create a group…" required><button type="submit" aria-label="Create group">+</button></form><small id="group-error" role="alert"></small></section>
+        <section><h2>Chats</h2><ul id="direct-messages"></ul></section>
+        <section><h2>Online now <span id="user-count"></span></h2><ul id="users" class="online-list"></ul></section>
+        <section><h2>Discover groups</h2><ul id="groups"></ul></section>
       </div>
-      <footer><p class="sidebar-note">A space for every conversation.<br>Ask <strong>@ai</strong> anything in a group.</p><div class="theme-control" aria-label="Colour theme"><button type="button" data-theme-choice="light" aria-label="Light theme">☀</button><button type="button" data-theme-choice="dark" aria-label="Dark theme">☾</button><button type="button" data-theme-choice="system" aria-label="System theme">▣</button></div></footer>
     </aside>
     <main id="chat-window" class="main">
-      <header class="room-header"><button id="back-button" class="icon-button mobile-back" aria-label="Back to conversations">←</button><span id="header-avatar"></span><div class="room-heading"><p class="eyebrow" id="room-kind">YOUR CONVERSATIONS</p><h1 id="room-title">Choose a conversation</h1><button id="room-members" class="text-button" hidden></button></div><button id="summarize" class="secondary" disabled>✨ Summarize</button></header>
+      <header class="room-header"><button id="back-button" class="icon-button mobile-back" aria-label="Back to conversations" data-icon="back"></button><span id="header-avatar"></span><div class="room-heading"><h1 id="room-title">Choose a conversation</h1><p id="room-kind">Your conversations</p><button id="room-members" class="text-button" hidden></button></div><button id="summarize" class="icon-button" aria-label="Summarize conversation" title="Summarize conversation" data-icon="sparkles" disabled></button></header>
       <div class="conversation-area"><div id="messages" class="messages" role="log" aria-live="polite"></div>
-      <button id="new-messages" class="new-messages" hidden>↓ New messages</button>
-      <div id="drop-hint" class="drop-hint" hidden>📎 Drop a file to share<br><small>Up to 5 MB • only this conversation</small></div></div><div id="typing-indicator" class="typing" aria-live="polite"></div>
+      <button id="new-messages" class="new-messages" hidden>New messages</button>
+      <div id="drop-hint" class="drop-hint" hidden>Drop a file to share<br><small>Up to 5 MB • only this conversation</small></div><div id="typing-indicator" class="typing" aria-live="polite"><span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span><span id="typing-text"></span></div></div>
       <div class="composer-wrap"><div id="emoji-picker" class="emoji-picker" hidden aria-label="Emoji picker"></div>
       <div id="sending-state" class="sending-state" role="status" hidden></div>
-      <form id="message-form" class="composer"><button id="attach-button" type="button" class="icon-button" aria-label="Attach file" disabled>📎</button><input id="file-input" type="file" hidden><label class="sr-only" for="message-input">Message</label><textarea id="message-input" rows="1" maxlength="4000" placeholder="Write a message…" disabled></textarea><button id="emoji-button" type="button" class="icon-button" aria-label="Choose emoji" aria-expanded="false" disabled>☺</button><button id="send-button" type="submit" disabled>Send <span aria-hidden="true">↑</span></button></form>
+      <form id="message-form" class="composer"><button id="attach-button" type="button" class="icon-button" aria-label="Attach file" disabled data-icon="attach"></button><input id="file-input" type="file" hidden><label class="sr-only" for="message-input">Message</label><textarea id="message-input" rows="1" maxlength="4000" placeholder="Message or @ai…" disabled></textarea><button id="ai-button" type="button" class="icon-button" aria-label="Ask AI (inserts @ai)" title="Ask AI" disabled data-icon="sparkles"></button><button id="emoji-button" type="button" class="icon-button" aria-label="Choose emoji" aria-expanded="false" disabled data-icon="smile"></button><button id="send-button" type="submit" aria-label="Send message" data-icon="send" disabled></button></form>
       <p class="composer-hint">Enter to send · Shift + Enter for a new line · Files up to 5 MB</p></div>
     </main>
   </div>
-  <dialog id="profile-editor"><form id="profile-form" class="modal-content"><div class="modal-heading"><h2>Edit profile</h2><button type="button" class="icon-button" data-close="profile-editor" aria-label="Close profile editor">✕</button></div><div id="avatar-preview" class="avatar-preview"></div><div class="photo-actions"><button id="upload-avatar" type="button" class="secondary">Upload photo</button><button id="remove-avatar" type="button" class="text-button">Remove</button></div><input id="avatar-input" type="file" accept="image/*" hidden><small>Photos are cropped to 128 × 128. Username stays the same.</small><label for="profile-bio">A little about you</label><textarea id="profile-bio" maxlength="160" rows="2" placeholder="What's on your mind?"></textarea><fieldset><legend>Favourite accent</legend><div id="profile-colors" class="color-options"></div></fieldset><button type="submit" id="save-profile">Save profile</button></form></dialog>
-  <dialog id="profile-card"><div class="modal-content"><div class="modal-heading"><h2>Profile</h2><button class="icon-button" data-close="profile-card" aria-label="Close profile">✕</button></div><div id="profile-card-content"></div></div></dialog>
-  <dialog id="member-list"><div class="modal-content"><div class="modal-heading"><h2>Group members</h2><button class="icon-button" data-close="member-list" aria-label="Close members">✕</button></div><ul id="member-list-content"></ul></div></dialog>
-  <dialog id="lightbox"><div class="lightbox-toolbar"><strong id="lightbox-name"></strong><a id="lightbox-download" class="button" download>Download</a><button class="icon-button" data-close="lightbox" aria-label="Close image">✕</button></div><img id="lightbox-image" alt="Shared image"></dialog>
+  <dialog id="profile-editor"><form id="profile-form" class="modal-content"><div class="modal-heading"><h2>Edit profile</h2><button type="button" class="icon-button" data-close="profile-editor" aria-label="Close profile editor" data-icon="close"></button></div><div id="avatar-preview" class="avatar-preview"></div><div class="photo-actions"><button id="upload-avatar" type="button" class="secondary">Upload photo</button><button id="remove-avatar" type="button" class="text-button">Remove</button></div><input id="avatar-input" type="file" accept="image/*" hidden><small>Photos are cropped to 128 × 128. Username stays the same.</small><label for="profile-bio">A little about you</label><textarea id="profile-bio" maxlength="160" rows="2" placeholder="What's on your mind?"></textarea><fieldset><legend>Favourite accent</legend><div id="profile-colors" class="color-options"></div></fieldset><button type="submit" id="save-profile">Save profile</button></form></dialog>
+  <dialog id="profile-card"><div class="modal-content"><div class="modal-heading"><h2>Profile</h2><button class="icon-button" data-close="profile-card" aria-label="Close profile" data-icon="close"></button></div><div id="profile-card-content"></div></div></dialog>
+  <dialog id="member-list"><div class="modal-content"><div class="modal-heading"><h2>Group members</h2><button class="icon-button" data-close="member-list" aria-label="Close members" data-icon="close"></button></div><ul id="member-list-content"></ul></div></dialog>
+  <dialog id="lightbox"><div class="lightbox-toolbar"><strong id="lightbox-name"></strong><a id="lightbox-download" class="button" download>Download</a><button class="icon-button" data-close="lightbox" aria-label="Close image" data-icon="close"></button></div><img id="lightbox-image" alt="Shared image"></dialog>
+  <dialog id="me-sheet" class="sheet"><div class="modal-content"><div class="modal-heading"><h2>Me</h2><button class="icon-button" data-close="me-sheet" aria-label="Close Me" data-icon="close"></button></div><strong id="my-name"></strong><button id="edit-profile" class="secondary">Edit profile</button><span class="field-label">Theme</span><div class="theme-control"><button data-theme-choice="light" aria-label="Light theme" data-icon="sun"></button><button data-theme-choice="dark" aria-label="Dark theme" data-icon="moon"></button><button data-theme-choice="system" aria-label="System theme" data-icon="monitor"></button></div><button id="notifications-toggle" class="secondary" aria-pressed="false">Notifications off</button><button id="logout-button" class="secondary">Log out</button></div></dialog>
+  <dialog id="create-group-sheet" class="sheet"><div class="modal-content"><div class="modal-heading"><h2>Create group</h2><button class="icon-button" data-close="create-group-sheet" aria-label="Close create group" data-icon="close"></button></div><form id="group-form" class="create-group"><label for="group-input">Group name</label><input id="group-input" maxlength="60" placeholder="Name your group" required><button type="submit">Create group</button><small id="group-error" role="alert"></small></form></div></dialog>
+  <div id="message-banner" class="message-banner" hidden><button id="banner-open" class="banner-open"></button><button id="banner-close" class="icon-button" aria-label="Dismiss message" data-icon="close"></button></div>
   <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
 </body>
 </html>

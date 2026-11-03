@@ -71,13 +71,8 @@ tab normally resumes the same account and kicks the previous tab.
 DATA_FILE (default ./data/chat-data.json, relative to the working directory)
 contains accounts, hashed sessions, groups, DM participant metadata, per-room
 history (last 200 messages), profiles, per-account unread counts and a file registry.
-Binary files live at <directory of DATA_FILE>/uploads/<uuid>, outside the public
-static directory. The registry keeps owning-room metadata even when the original
-message ages out of history, so group deletion also removes those older files.
-Back up the JSON and uploads directory together. No HTTP upload/download routes
-exist. Socket.IO maxHttpBufferSize is 6 × 1024 × 1024 bytes; application file limit
-is 5 MB, leaving room for event metadata. Startup loads it;
-expired sessions are ignored. Mutations schedule a save after 500ms of inactivity.
+Startup loads existing data and ignores expired sessions. Attachment bytes are stored
+separately as described below; uploads have no public HTTP route. Mutations schedule a save after 500ms of inactivity.
 Writes use a temporary file in the same directory and atomic rename. Server close,
 SIGINT and SIGTERM flush pending state. A missing file starts empty; malformed or
 unreadable saved data fails startup. A single server process owns a data file.

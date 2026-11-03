@@ -53,14 +53,16 @@ async function main() {
       return socket;
     }
     let alice = await client();
-    const bob = await client(), carol = await client(), guest = await client();
+    let bob = await client();
+    const carol = await client(), guest = await client();
     assert.equal((await request(guest, 'group_create', { name: 'No login' })).ok, false);
     const aliceRegistration = await request(alice, 'register', { username: ' Alice ', password: 'Alice-secret-123' });
     assert.equal(aliceRegistration.ok, true);
     assert.equal(aliceRegistration.name, 'Alice');
     let aliceToken = aliceRegistration.token;
     assert.match(aliceToken, /^[A-Za-z0-9_-]{43}$/);
-    assert.equal((await request(bob, 'register', { username: 'Bob', password: 'Bob-secret-123' })).ok, true);
+    const bobRegistration = await request(bob, 'register', { username: 'Bob', password: 'Bob-secret-123' });
+    assert.equal(bobRegistration.ok, true);
     assert.equal((await request(carol, 'register', { username: 'Carol', password: 'Carol-secret-123' })).ok, true);
     for (const name of ['', ' '.repeat(3), 'x'.repeat(21), 'aLiCe', 'a|b', 'a\u0000b']) {
       const result = await request(guest, 'register', { username: name, password: 'Valid-password' });
@@ -140,6 +142,19 @@ async function main() {
     await delay(100);
     assert.equal(events.get(alice).messages.filter(m => m.roomId === group && m.kind === 'chat').length, 1);
     assert.equal(events.get(carol).messages.length, 0, 'R11 non-member gets no group messages');
+    // Group unread belongs to the account, survives offline delivery, and clears durably.
+    bob.disconnect();
+    await waitUntil(() => !events.get(alice).users.includes('Bob'), 'Member disconnect');
+    await request(alice, 'message_send', { roomId: group, text: 'Reconnect unread' });
+    bob = await client();
+    const memberResume = await request(bob, 'resume', { token: bobRegistration.token });
+    assert.equal(memberResume.unread[group], 2, 'Group member receives live and offline unread; own join is excluded');
+    assert.equal((await request(bob, 'room_read', { roomId: group })).ok, true);
+    bob.disconnect();
+    await waitUntil(() => !events.get(alice).users.includes('Bob'), 'Read member disconnect');
+    bob = await client();
+    const memberReadResume = await request(bob, 'resume', { token: bobRegistration.token });
+    assert.equal(memberReadResume.unread[group] || 0, 0, 'room_read stays cleared after reconnect');
     assert.equal((await request(bob, 'room_open', { roomId: group })).messages.find(m => m.kind === 'chat').text, 'Members only');
     await request(alice, 'typing', { roomId: group, typing: true });
     await waitUntil(() => events.get(bob).typing.some(t => t.roomId === group && t.typing), 'Group typing');
@@ -152,6 +167,13 @@ async function main() {
     await request(alice, 'message_send', { roomId: group, text: '@ai Explain TCP' });
     await waitUntil(() => events.get(bob).messages.some(m => m.sender === 'AI Bot'), 'AI fallback');
     assert.equal(events.get(carol).messages.length, 0);
+    // @ai also works in DMs (any case); the answer reaches only the two participants.
+    const aiBefore = events.get(bob).messages.filter(m => m.roomId === dm && m.sender === 'AI Bot').length;
+    await request(alice, 'message_send', { roomId: dm, text: '@AI hello' });
+    await waitUntil(() => events.get(bob).messages.filter(m => m.roomId === dm && m.sender === 'AI Bot').length > aiBefore, 'DM AI reply');
+    await request(alice, 'message_send', { roomId: dm, text: '@ai' });
+    await waitUntil(() => events.get(alice).messages.some(m => m.roomId === dm && m.sender === 'AI Bot' && /Type @ai followed/.test(m.text)), 'Bare @ai help');
+    assert.equal(events.get(carol).messages.length, 0, 'DM AI replies stay private');
 
 
     // Binary attachments follow the exact same room permissions as text.
@@ -207,7 +229,7 @@ async function main() {
     assert.equal((await request(alice, 'profile_update', { ...validProfile, avatar: jpeg })).ok, true);
     await waitUntil(() => events.get(bob).profiles.Alice?.avatar === jpeg, 'JPEG avatar broadcast');
     assert.equal((await request(alice, 'profile_update', { ...validProfile, username: 'Changed' })).ok, true);
-    await waitUntil(() => [alice, bob, carol].every(s => events.get(s).profiles.Alice?.bio === validProfile.bio), 'Public profile broadcast');
+    await waitUntil(() => [alice, bob, carol].every(s => events.get(s).profiles.Alice?.bio === validProfile.bio && events.get(s).profiles.Alice?.avatar === validProfile.avatar), 'Public profile broadcast');
     assert.deepEqual(events.get(bob).profiles.Alice, validProfile);
     assert.equal(events.get(guest).profiles.Alice, undefined, 'Unauthenticated guests get no profiles');
     assert.equal(events.get(bob).profiles.Changed, undefined, 'Profile cannot change identity');

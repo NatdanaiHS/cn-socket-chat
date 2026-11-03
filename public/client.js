@@ -1,6 +1,84 @@
 'use strict';
 const socket = io();
 const $ = id => document.getElementById(id);
+
+// All UI icons share one SVG source; user content is always written with textContent.
+function icon(name) {
+  const paths = {
+    chat: ['M21 11.5a8.5 8.5 0 0 1-8.5 8.5H3l2-5a8.5 8.5 0 1 1 16-3.5Z','M8 10h8M8 14h5'],
+    plus: ['M12 5v14M5 12h14'], close: ['m6 6 12 12M6 18 18 6'],
+    back: ['m15 18-6-6 6-6'], send: ['M12 19V5m-6 6 6-6 6 6'],
+    attach: ['m21 11-8 8a6 6 0 0 1-8-8l9-9a4 4 0 0 1 6 6l-9 9a2 2 0 0 1-3-3l8-8'],
+    smile: ['M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0ZM8 14s1 3 4 3 4-3 4-3M8 9h.01M16 9h.01'],
+    sparkles: ['m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5ZM20 2v4m-2-2h4'],
+    users: ['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M22 21v-2a4 4 0 0 0-3-3.9','M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM17 3a4 4 0 0 1 0 8'],
+    file: ['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M8 13h8M8 17h5'],
+    download: ['M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5'],
+    sun: ['M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8ZM12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1'],
+    moon: ['M21 13A9 9 0 0 1 11 3a9 9 0 1 0 10 10Z'],
+    monitor: ['M3 3h18v14H3ZM8 21h8M12 17v4'],
+    eye: ['M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z','M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z'],
+    check: ['m5 12 4 4L19 6'], alert: ['m12 3 10 18H2ZM12 9v4m0 4h.01']
+  };
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  for (const [key, value] of Object.entries({ viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', class: 'icon' })) svg.setAttribute(key, value);
+  for (const d of paths[name] || paths.chat) { const path = document.createElementNS(svg.namespaceURI, 'path'); path.setAttribute('d', d); svg.append(path); }
+  return svg;
+}
+document.querySelectorAll('[data-icon]').forEach(node => node.replaceChildren(icon(node.dataset.icon)));
+for (const [id, name] of Object.entries({ 'back-button': 'back', 'attach-button': 'attach', 'emoji-button': 'smile', 'ai-button': 'sparkles', 'password-toggle': 'eye' })) $(id).replaceChildren(icon(name));
+document.querySelectorAll('[data-close]').forEach(node => node.replaceChildren(icon('close')));
+document.querySelectorAll('[data-theme-choice]').forEach(node => node.replaceChildren(icon({light:'sun',dark:'moon',system:'monitor'}[node.dataset.themeChoice])));
+$('new-messages').replaceChildren(icon('download'), document.createTextNode('New messages'));
+const backUnread = document.createElement('span'); backUnread.id = 'back-unread'; backUnread.className = 'badge'; backUnread.hidden = true; $('back-button').append(backUnread);
+let firstUnreadId = null, typingExpiryTimer, typingSignature = '', bannerTimer;
+let notificationsEnabled = false;
+try { notificationsEnabled = localStorage.getItem('wongchat-notifications') === 'true'; } catch {}
+function updateNotifications() {
+  const enabled = notificationsEnabled && 'Notification' in window && Notification.permission === 'granted';
+  $('notifications-toggle').setAttribute('aria-pressed', String(enabled));
+  $('notifications-toggle').textContent = enabled ? 'Notifications on' : 'Notifications off';
+}
+updateNotifications();
+$('notifications-toggle').onclick = async () => {
+  if (!('Notification' in window)) return toast('This browser does not support notifications.', true);
+  try {
+    if (notificationsEnabled && Notification.permission === 'granted') notificationsEnabled = false;
+    else notificationsEnabled = (await Notification.requestPermission()) === 'granted';
+    try { localStorage.setItem('wongchat-notifications', String(notificationsEnabled)); } catch {}
+    updateNotifications();
+  } catch (error) { showError(error); }
+};
+$('me-button').onclick = () => $('me-sheet').showModal();
+$('create-group-button').onclick = () => $('create-group-sheet').showModal();
+function dismissBanner() { clearTimeout(bannerTimer); $('message-banner').hidden = true; }
+$('banner-close').onclick = dismissBanner;
+let bannerStartX = 0;
+$('message-banner').addEventListener('touchstart', e => { bannerStartX = e.changedTouches[0].clientX; }, { passive: true });
+$('message-banner').addEventListener('touchend', e => { if (Math.abs(e.changedTouches[0].clientX - bannerStartX) > 48) dismissBanner(); }, { passive: true });
+function announceMessage(message) {
+  const group = groups.find(g => g.roomId === message.roomId);
+  const title = group?.name || message.roomId.slice(3).split('|').find(n => n !== myName);
+  const open = () => { dismissBanner(); void openRoom({ roomId: message.roomId }, title, group ? 'group' : 'private'); };
+  const copy = element('span', 'banner-copy'); copy.append(element('strong', '', message.roomId.startsWith('group:') ? message.sender + ' · ' + message.roomId.slice(6) : message.sender), element('span', '', preview(message)));
+  $('banner-open').replaceChildren(avatar(message.sender, '', false), copy); $('banner-open').onclick = open;
+  $('message-banner').hidden = false; clearTimeout(bannerTimer); bannerTimer = setTimeout(dismissBanner, 4000);
+  if (notificationsEnabled && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+    try { const notice = new Notification(message.sender, { body: preview(message), tag: message.roomId }); notice.onclick = () => { window.focus(); open(); notice.close(); }; } catch {}
+  }
+}
+function maintainViewport() {
+  const follow = activeRoom && nearBottom();
+  document.documentElement.style.setProperty('--app-height', (window.visualViewport?.height || window.innerHeight) + 'px');
+  if (follow) requestAnimationFrame(scrollBottom);
+}
+window.visualViewport?.addEventListener('resize', maintainViewport);
+window.visualViewport?.addEventListener('scroll', maintainViewport);
+window.addEventListener('resize', maintainViewport);
+window.addEventListener('popstate', () => { if (myName) { clearRoom(); renderLists(); } });
+history.replaceState({ wongchat: 'list' }, '');
+window.addEventListener('DOMContentLoaded', maintainViewport);
+
 const colors = ['#4f46e5', '#2563eb', '#0f766e', '#a21caf', '#be123c', '#b45309'];
 const colorNames = ['Indigo', 'Blue', 'Teal', 'Purple', 'Rose', 'Amber'];
 let myName = '', users = [], groups = [], directRooms = [], profiles = {};
@@ -56,10 +134,10 @@ function element(tag, className, text) {
 }
 function toast(text, error = false) {
   const node = element('div', 'toast' + (error ? ' error' : ''));
-  const close = element('button', 'icon-button', '×');
+  const close = element('button', 'icon-button'); close.append(icon('close'));
   close.type = 'button'; close.setAttribute('aria-label', 'Dismiss notification');
   close.onclick = () => node.remove();
-  node.append(element('span', '', (error ? '⚠ ' : '✓ ') + text), close);
+  node.append(icon(error ? 'alert' : 'check'), element('span', '', text), close);
   const container = document.querySelector('dialog[open]') || document.body;
   container.append($('toasts'));
   $('toasts').append(node);
@@ -90,7 +168,7 @@ function avatar(name, size = '', clickable = true, override) {
 function showProfile(name) {
   const profile = profileFor(name), content = $('profile-card-content');
   content.replaceChildren(avatar(name, 'large', false), element('h2', '', name),
-    element('small', '', users.includes(name) ? '● Online' : 'Offline'),
+    element('small', '', users.includes(name) ? 'Online' : 'Offline'),
     element('p', 'muted', profile.bio || 'No bio yet. A hello is a good place to start.'));
   const button = element('button', 'button', name === myName ? 'Edit profile' : 'Message');
   button.disabled = name !== myName && !users.includes(name) && !directRooms.some(r => r.target === name);
@@ -113,6 +191,14 @@ function updateIdentity() {
 function updateTitle() {
   const total = [...unread.values()].reduce((sum, count) => sum + count, 0);
   document.title = (total ? '(' + total + ') ' : '') + 'WongChat';
+  const other = total - (unread.get(activeRoom?.roomId) || 0);
+  backUnread.hidden = !other; backUnread.textContent = other > 99 ? '99+' : String(other);
+  const canvas = document.createElement('canvas'); canvas.width = canvas.height = 32;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#2563EB'; ctx.beginPath(); ctx.roundRect(0, 0, 32, 32, 8); ctx.fill();
+  ctx.fillStyle = '#FFFFFF'; ctx.font = 'bold 22px system-ui'; ctx.fillText('W', 5, 24);
+  if (total) { ctx.beginPath(); ctx.arc(26, 6, 6, 0, Math.PI * 2); ctx.fillStyle = '#EF4444'; ctx.fill(); }
+  document.querySelector('link[rel="icon"]').href = canvas.toDataURL();
 }
 function relativeTime(time) {
   const minutes = Math.max(0, Math.floor((Date.now() - new Date(time)) / 60000));
@@ -123,11 +209,11 @@ function relativeTime(time) {
 }
 function preview(message) {
   if (!message) return '';
-  return (message.sender === myName ? 'You: ' : '') + (message.kind === 'file' ? '📎 ' + message.file.name : message.text);
+  return (message.sender === myName && message.kind !== 'system' ? 'You: ' : '') + (message.kind === 'file' ? 'File: ' + message.file.name : message.text);
 }
 function makeRow(name, roomId, open, fallback, group = false) {
-  const li = element('li', 'list-row' + (activeRoom?.roomId === roomId ? ' selected' : ''));
-  li.append(group ? element('span', 'avatar', '#') : avatar(name));
+  const li = element('li', 'list-row' + (activeRoom?.roomId === roomId ? ' selected' : '') + (unread.get(roomId) ? ' unread' : ''));
+  const groupAvatar = element('span', 'avatar'); groupAvatar.append(icon('users')); li.append(group ? groupAvatar : avatar(name));
   const button = element('button', 'list-button'); button.type = 'button';
   const copy = element('span', 'row-copy'), top = element('span', 'row-top');
   top.append(element('strong', '', name + (name === myName ? ' (you)' : '')));
@@ -136,7 +222,8 @@ function makeRow(name, roomId, open, fallback, group = false) {
     const time = element('time', '', relativeTime(last.time)); time.dateTime = last.time;
     top.append(time);
   }
-  copy.append(top, element('span', 'row-preview', preview(last) || fallback));
+  const typing = typingNames(roomId).length > 0;
+  copy.append(top, element('span', 'row-preview' + (typing ? ' is-typing' : ''), typing ? 'typing…' : preview(last) || fallback));
   button.append(copy); button.onclick = open;
   if (unread.get(roomId)) button.append(element('span', 'badge', String(unread.get(roomId))));
   li.append(button);
@@ -153,14 +240,14 @@ function renderHeader() {
   $('room-title').textContent = activeRoom.title;
   if (activeRoom.kind === 'private') {
     $('header-avatar').append(avatar(activeRoom.title));
-    $('room-kind').textContent = users.includes(activeRoom.title) ? 'ONLINE · PRIVATE CONVERSATION' : 'OFFLINE · PRIVATE CONVERSATION';
+    $('room-kind').textContent = users.includes(activeRoom.title) ? 'online' : 'offline';
     $('room-title').onclick = () => showProfile(activeRoom.title);
     $('room-title').tabIndex = 0; $('room-title').setAttribute('role', 'button');
   } else {
-    $('header-avatar').append(element('span', 'avatar', '#'));
+    const groupAvatar = element('span', 'avatar'); groupAvatar.append(icon('users')); $('header-avatar').append(groupAvatar);
     const group = groups.find(g => g.roomId === activeRoom.roomId);
-    $('room-kind').textContent = 'GROUP CONVERSATION';
-    $('room-members').textContent = (group?.members.length || 0) + ' members ⌄';
+    $('room-kind').textContent = memberCount(group?.members.length || 0);
+    $('room-members').textContent = '';
     $('room-members').setAttribute('aria-label', 'View group members');
     $('room-title').onclick = null; $('room-title').removeAttribute('tabindex'); $('room-title').removeAttribute('role');
   }
@@ -170,59 +257,51 @@ function renderLists() {
   const search = $('sidebar-search').value.trim().toLowerCase();
   const matches = name => name.toLowerCase().includes(search);
   $('users').replaceChildren(); $('direct-messages').replaceChildren(); $('groups').replaceChildren();
-  $('user-count').textContent = users.length;
-  for (const name of users.filter(matches)) {
-    $('users').append(makeRow(name, dmId(name), () => name === myName ? showProfile(name) : openRoom({ target: name }, name, 'private'),
-      name === myName ? 'That’s you. Looking good!' : profileFor(name).bio || 'Online · Say hello'));
+  const online = users.filter(name => name !== myName && matches(name));
+  $('user-count').textContent = online.length;
+  for (const name of online) {
+    const row = element('li', 'online-person'), button = element('button'); button.type = 'button';
+    button.append(avatar(name, '', false), element('span', '', name)); button.onclick = () => openRoom({ target: name }, name, 'private');
+    row.append(button); $('users').append(row);
   }
-  for (const room of directRooms.filter(room => matches(room.target))) {
-    $('direct-messages').append(makeRow(room.target, room.roomId, () => openRoom({ roomId: room.roomId }, room.target, 'private'),
-      users.includes(room.target) ? 'Online · Start the conversation' : 'Offline · Leave a message'));
+  const chats = [...directRooms.map(r => ({ ...r, title: r.target, kind: 'private' })),
+    ...groups.filter(g => g.members.includes(myName)).map(g => ({ ...g, title: g.name, kind: 'group' }))];
+  chats.sort((a, b) => Number(!!unread.get(b.roomId)) - Number(!!unread.get(a.roomId)) ||
+    (lastMessages.get(b.roomId)?.time || '').localeCompare(lastMessages.get(a.roomId)?.time || '') || a.title.localeCompare(b.title));
+  for (const room of chats.filter(r => matches(r.title))) {
+    $('direct-messages').append(makeRow(room.title, room.roomId, () => openRoom({ roomId: room.roomId }, room.title, room.kind), 'Start the conversation', room.kind === 'group'));
   }
-  for (const group of groups.filter(g => matches(g.name))) {
-    const joined = group.members.includes(myName);
-    const item = element('li', 'group-item');
-    const row = makeRow(group.name, group.roomId, () => openRoom({ roomId: group.roomId }, group.name, 'group'), joined ? 'Start the conversation' : 'Join to see messages', true);
-    // A div avoids nesting list items while reusing the row layout.
-    const wrapper = element('div', row.className); wrapper.append(...row.childNodes);
-    wrapper.querySelector('.list-button').disabled = !joined;
-    const action = element('button', 'small-button', joined ? 'Leave' : 'Join'); action.type = 'button';
-    action.setAttribute('aria-label', (joined ? 'Leave ' : 'Join ') + group.name);
-    action.onclick = async () => {
-      action.disabled = true;
-      try {
-        await request(joined ? 'group_leave' : 'group_join', { roomId: group.roomId });
-        if (!joined) await openRoom({ roomId: group.roomId }, group.name, 'group');
-        else toast('Left ' + group.name);
-      } catch (error) { showError(error); action.disabled = false; }
-    };
-    wrapper.append(action);
-    const details = element('div', 'group-details'), stack = element('span', 'avatar-stack');
-    for (const name of group.members.slice(0, 3)) stack.append(avatar(name, 'small'));
-    details.append(stack, element('span', '', group.members.length + (group.members.length === 1 ? ' member' : ' members')));
-    item.append(wrapper, details); $('groups').append(item);
+  for (const group of groups.filter(g => !g.members.includes(myName) && matches(g.name))) {
+    const row = makeRow(group.name, group.roomId, () => {}, memberCount(group.members.length), true);
+    const join = element('button', 'small-button', 'Join'); join.type = 'button'; join.setAttribute('aria-label', 'Join ' + group.name);
+    join.onclick = async () => { join.disabled = true; try { await request('group_join', { roomId: group.roomId }); await openRoom({ roomId: group.roomId }, group.name, 'group'); } catch (error) { showError(error); join.disabled = false; } };
+    row.querySelector('.list-button').onclick = () => join.click();
+    row.append(join); $('groups').append(row);
   }
-  for (const [id, text] of [['users', '🌿 No people online right now.'], ['direct-messages', '💬 Your conversations will appear here.'], ['groups', '👥 Create a space for your people.']]) {
-    if (!$(id).childElementCount) $(id).append(element('li', 'list-empty', search ? 'No matches found.' : text));
+  for (const [id, text] of [['users', 'No one else is online.'], ['direct-messages', 'Your conversations will appear here.'], ['groups', 'No new groups to discover.']]) {
+    if (!$(id).childElementCount) { const empty = element('li', 'list-empty'); empty.append(icon('chat'), element('span', '', search ? 'No matches found.' : text)); $(id).append(empty); }
   }
   updateTitle(); renderHeader();
 }
 $('sidebar-search').oninput = renderLists;
 function setComposer(enabled) {
-  for (const id of ['message-input', 'send-button', 'summarize', 'attach-button', 'emoji-button']) $(id).disabled = !enabled;
+  for (const id of ['message-input', 'send-button', 'summarize', 'attach-button', 'emoji-button', 'ai-button']) $(id).disabled = !enabled;
 }
 function clearRoom() {
-  stopTyping(); openingVersion++; activeRoom = null;
+  stopTyping(); openingVersion++; activeRoom = null; firstUnreadId = null;
   $('messages').removeAttribute('aria-busy');
-  setComposer(false); $('chat-app').classList.remove('room-open');
+  setComposer(false); $('chat-app').classList.remove('room-open'); syncScreens();
   $('emoji-picker').hidden = true; $('emoji-button').setAttribute('aria-expanded', 'false');
   $('new-messages').hidden = true;
   renderHeader(); renderMessages(true);
 }
 async function openRoom(payload, title, kind) {
-  stopTyping(); const version = ++openingVersion;
+  stopTyping(); firstUnreadId = null; const version = ++openingVersion;
+  const requestedId = payload.roomId || dmId(payload.target);
+  const unreadCount = unread.get(requestedId) || 0;
   activeRoom = null; setComposer(false);
-  $('chat-app').classList.add('room-open');
+  if (matchMedia('(max-width: 768px)').matches && history.state?.wongchat !== 'room') history.pushState({ wongchat: 'room' }, '');
+  $('chat-app').classList.add('room-open'); syncScreens();
   $('room-title').textContent = title; $('room-kind').textContent = 'LOADING CONVERSATION…';
   $('messages').replaceChildren(); $('messages').setAttribute('aria-busy', 'true');
   for (let i = 0; i < 4; i++) $('messages').append(element('div', 'skeleton'));
@@ -239,15 +318,18 @@ async function openRoom(payload, title, kind) {
     histories.set(result.roomId, messages);
     if (messages.length) lastMessages.set(result.roomId, messages.at(-1));
     if (kind === 'private' && !directRooms.some(room => room.roomId === result.roomId)) directRooms.push({ roomId: result.roomId, target: title });
+    const incoming = messages.filter(message => message.sender !== myName);
+    firstUnreadId = unreadCount ? incoming[Math.max(0, incoming.length - unreadCount)]?.id : null;
     unread.delete(result.roomId); socket.emit('room_read', { roomId: result.roomId });
     setComposer(true); $('message-input').value = ''; growComposer();
     $('new-messages').hidden = true; renderLists(); renderMessages(true);
+    if (firstUnreadId) requestAnimationFrame(() => $('unread-divider')?.scrollIntoView({ block: 'start' }));
     if (matchMedia('(min-width: 769px)').matches) $('message-input').focus();
   } catch (error) {
     if (version === openingVersion) { clearRoom(); showError(error); }
   } finally { if (version === openingVersion) $('messages').removeAttribute('aria-busy'); }
 }
-$('back-button').onclick = () => { clearRoom(); renderLists(); };
+$('back-button').onclick = () => { if (history.state?.wongchat === 'room') history.back(); else { clearRoom(); renderLists(); } };
 function nearBottom() { const node = $('messages'); return node.scrollHeight - node.scrollTop - node.clientHeight < 100; }
 function scrollBottom() { $('messages').scrollTop = $('messages').scrollHeight; $('new-messages').hidden = true; }
 $('new-messages').onclick = scrollBottom;
@@ -259,37 +341,40 @@ function dateLabel(time) {
   return date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
 }
 function emptyState(emoji, title, hint) {
-  const node = element('div', 'empty'); node.append(element('span', 'empty-emoji', emoji), element('h2', '', title), element('p', '', hint)); return node;
+  const node = element('div', 'empty'), symbol = element('span', 'empty-symbol'); symbol.append(icon('chat')); node.append(symbol, element('h2', '', title), element('p', '', hint)); return node;
 }
 function renderMessages(forceBottom = false) {
   const shouldScroll = forceBottom || nearBottom(), position = $('messages').scrollTop;
   $('messages').replaceChildren(); $('messages').removeAttribute('aria-busy');
-  if (!activeRoom) $('messages').append(emptyState('💬', 'Your next conversation starts here.', 'Choose someone online, pick up a direct message, or join a group.'));
+  if (!activeRoom) $('messages').append(emptyState('chat', 'Your next conversation starts here.', 'Choose someone online, pick up a direct message, or join a group.'));
   else {
     const messages = [...(histories.get(activeRoom.roomId) || []), ...(summaries.get(activeRoom.roomId) || [])].sort((a, b) => a.time.localeCompare(b.time));
-    if (!messages.length) $('messages').append(emptyState('👋', 'Break the ice.', 'Share a thought, send a file, or just say hello.'));
-    let previous = null, lastDate = '';
-    for (const message of messages) {
+    if (!messages.length) $('messages').append(emptyState('chat', 'Break the ice.', 'Share a thought, send a file, or just say hello.'));
+    const sameGroup = (a, b) => a && b && a.kind !== 'system' && b.kind !== 'system' && a.sender === b.sender &&
+      (a.kind === 'ai') === (b.kind === 'ai') && new Date(a.time).toDateString() === new Date(b.time).toDateString() &&
+      Math.abs(new Date(b.time) - new Date(a.time)) < 5 * 60000 && b.id !== firstUnreadId;
+    let lastDate = '';
+    messages.forEach((message, index) => {
       const day = new Date(message.time).toDateString();
-      if (day !== lastDate) { $('messages').append(element('div', 'date-separator', dateLabel(message.time))); previous = null; lastDate = day; }
-      if (message.kind === 'system') { $('messages').append(element('p', 'system-message', message.text)); previous = null; continue; }
+      if (day !== lastDate) { $('messages').append(element('div', 'date-separator', dateLabel(message.time))); lastDate = day; }
+      if (message.id && message.id === firstUnreadId) { const divider = element('div', 'unread-divider', 'New messages'); divider.id = 'unread-divider'; $('messages').append(divider); }
+      if (message.kind === 'system') { $('messages').append(element('p', 'system-message', message.text)); return; }
       const own = message.sender === myName && ['chat', 'file'].includes(message.kind);
-      const grouped = previous && previous.sender === message.sender && previous.kind !== 'system' &&
-        (previous.kind === 'ai') === (message.kind === 'ai') && new Date(message.time) - new Date(previous.time) < 5 * 60000;
+      const grouped = sameGroup(messages[index - 1], message), last = !sameGroup(message, messages[index + 1]);
       const row = element('div', 'message-row' + (own ? ' own' : '') + (grouped ? ' grouped' : '') + (message.kind === 'ai' ? ' ai' : ''));
-      if (!own && !grouped) row.append(message.kind === 'ai' ? element('span', 'avatar', '✨') : avatar(message.sender));
-      const article = element('article', 'message');
-      if (!own && !grouped) {
-        const name = element('button', 'message-name', message.kind === 'ai' ? '✨ ' + message.sender : message.sender);
-        name.type = 'button'; if (message.kind !== 'ai') name.onclick = () => showProfile(message.sender);
-        article.append(name);
+      if (!own) { const slot = element('span', 'message-avatar'); if (last && message.kind !== 'ai') slot.append(avatar(message.sender, 'small')); row.append(slot); }
+      const stack = element('div', 'bubble-stack'), article = element('article', 'message' + (message.kind === 'file' ? ' attachment' : ''));
+      if (!own && !grouped && activeRoom.kind === 'group' && message.kind !== 'ai') {
+        const name = element('button', 'message-name', message.sender); name.type = 'button'; name.onclick = () => showProfile(message.sender); stack.append(name);
       }
-      if (message.kind === 'file') article.append(fileContent(message));
-      else article.append(element('p', 'message-text', message.text));
-      const time = element('time', '', new Date(message.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-      time.dateTime = message.time; article.tabIndex = 0; article.title = new Date(message.time).toLocaleString(); article.append(time);
-      row.append(article); $('messages').append(row); previous = message;
-    }
+      if (message.kind === 'ai') { const chip = element('span', 'ai-chip', 'AI'); chip.prepend(icon('sparkles')); stack.append(chip); }
+      if (message.kind === 'file') article.append(fileContent(message)); else article.append(element('p', 'message-text', message.text));
+      stack.append(article);
+      const time = element('time', '', new Date(message.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); time.dateTime = message.time;
+      if (own && last) row.append(time);
+      row.append(stack); if (!own && last) row.append(time);
+      $('messages').append(row);
+    });
   }
   if (shouldScroll) scrollBottom(); else $('messages').scrollTop = position;
   renderTyping();
@@ -338,9 +423,9 @@ function fileContent(message) {
       };
     }).catch(error => { if (button.isConnected) { status.textContent = 'Preview unavailable. Click to retry.'; button.onclick = () => { button.replaceWith(fileContent(message)); showError(error); }; } });
   }
-  const card = element('div', 'file-card'); card.append(element('span', 'file-icon', '📄'));
+  const card = element('div', 'file-card'); card.append(icon('file'));
   const info = element('span', 'file-info'); info.append(element('strong', '', file.name), element('small', '', fileSize(file.size)));
-  const download = element('button', 'file-download', '↓ Download'); download.type = 'button';
+  const download = element('button', 'file-download'); download.append(icon('download')); download.setAttribute('aria-label', 'Download ' + file.name); download.type = 'button';
   download.onclick = async () => {
     download.disabled = true;
     try {
@@ -354,6 +439,7 @@ function fileContent(message) {
 async function sendFile(file) {
   if (!activeRoom) return toast('Choose a conversation before sharing a file.', true);
   if (file.size > 5 * 1024 * 1024) return toast('That file is too large. The maximum size is 5 MB.', true);
+  stopTyping();
   const roomId = activeRoom.roomId, version = accountVersion;
   sendingCount++; $('sending-state').hidden = false; $('sending-state').textContent = 'Sending… ' + file.name;
   try {
@@ -377,14 +463,23 @@ $('chat-window').onpaste = event => {
   const item = [...(event.clipboardData?.items || [])].find(item => item.kind === 'file' && item.type.startsWith('image/'));
   if (item && activeRoom) { event.preventDefault(); const file = item.getAsFile(); if (file) void sendFile(file); }
 };
+function typingNames(roomId) {
+  return [...(typers.get(roomId) || [])].filter(([, expiry]) => expiry > Date.now()).map(([name]) => name).sort();
+}
 function renderTyping() {
-  const names = [...(typers.get(activeRoom?.roomId) || [])].filter(([, expiry]) => expiry > Date.now()).map(([name]) => name);
-  $('typing-indicator').replaceChildren();
-  if (names.length) {
-    const dots = element('span', 'typing-dots'); dots.setAttribute('aria-hidden', 'true');
-    dots.append(element('i'), element('i'), element('i'));
-    $('typing-indicator').append(dots, element('span', '', names.join(', ') + (names.length === 1 ? ' is typing' : ' are typing')));
+  clearTimeout(typingExpiryTimer);
+  let nextExpiry = Infinity;
+  for (const [room, people] of typers) {
+    for (const [name, expiry] of people) { if (expiry <= Date.now()) people.delete(name); else nextExpiry = Math.min(nextExpiry, expiry); }
+    if (!people.size) typers.delete(room);
   }
+  const names = typingNames(activeRoom?.roomId), signature = JSON.stringify(names);
+  if (signature !== typingSignature) {
+    typingSignature = signature;
+    $('typing-text').textContent = names.length ? names.join(', ') + (names.length === 1 ? ' is typing…' : ' are typing…') : '';
+    $('typing-indicator').classList.toggle('is-visible', names.length > 0);
+  }
+  if (nextExpiry < Infinity) typingExpiryTimer = setTimeout(() => { renderTyping(); renderLists(); }, Math.max(1, nextExpiry - Date.now()));
 }
 function stopTyping() {
   clearTimeout(typingTimer); lastTypingSent = 0;
@@ -397,9 +492,10 @@ $('message-input').onkeydown = event => {
 $('message-input').oninput = () => {
   growComposer(); if (!activeRoom) return;
   if (!$('message-input').value.trim()) return stopTyping();
-  if (Date.now() - lastTypingSent > 800) { socket.emit('typing', { roomId: activeRoom.roomId, typing: true }); lastTypingSent = Date.now(); }
-  clearTimeout(typingTimer); typingTimer = setTimeout(stopTyping, 1200);
+  if (!lastTypingSent || Date.now() - lastTypingSent >= 2000) { socket.emit('typing', { roomId: activeRoom.roomId, typing: true }); lastTypingSent = Date.now(); }
+  clearTimeout(typingTimer); typingTimer = setTimeout(stopTyping, 3000);
 };
+$('message-input').onblur = stopTyping;
 const emojis = ['😀','😄','😁','😂','🤣','😊','🙂','😉','😍','🥰','😘','😎','🤔','😅','😭','🥲','😮','😴','🙃','🥳','👍','👎','👏','🙌','🤝','🙏','💪','👋','❤️','🧡','💛','💚','💙','💜','🔥','✨','🎉','🎊','🎯','✅','💯','👀','💬','📚','☕','🍕','🚀','🌟'];
 for (const emoji of emojis) {
   const button = element('button', '', emoji); button.type = 'button'; button.setAttribute('aria-label', 'Insert ' + emoji);
@@ -427,7 +523,7 @@ function setAuthMode(create) {
   creatingAccount = create; $('confirm-label').hidden = $('confirm-input').hidden = !create; $('confirm-input').required = create;
   $('password-input').autocomplete = create ? 'new-password' : 'current-password';
   $('login-mode').setAttribute('aria-pressed', String(!create)); $('register-mode').setAttribute('aria-pressed', String(create));
-  $('login-button').textContent = create ? 'Create account →' : 'Log in →'; $('login-error').textContent = '';
+  $('login-button').textContent = create ? 'Create account' : 'Log in'; $('login-error').textContent = '';
 }
 $('login-mode').onclick = () => setAuthMode(false); $('register-mode').onclick = () => setAuthMode(true);
 $('password-toggle').onclick = () => {
@@ -440,14 +536,18 @@ function signedIn(result) {
   unread.clear(); for (const [id, count] of Object.entries(result.unread)) unread.set(id, count);
   lastMessages.clear(); for (const [id, message] of Object.entries(result.lastMessages || {})) lastMessages.set(id, message);
   $('password-input').value = $('confirm-input').value = ''; $('password-input').type = 'password'; $('password-toggle').setAttribute('aria-label', 'Show password'); $('password-toggle').setAttribute('aria-pressed', 'false');
+  document.body.classList.add('chatting');
   $('login-screen').hidden = true; $('chat-app').hidden = false; updateIdentity(); renderLists(); renderMessages(true);
 }
 function signedOut(message) {
   accountVersion++; clearRoom(); forgetFiles();
+  dismissBanner(); clearTimeout(typingExpiryTimer); typingSignature = ''; $('typing-text').textContent = ''; $('typing-indicator').classList.remove('is-visible');
+  if (history.state?.wongchat === 'room') history.replaceState({ wongchat: 'list' }, '');
   myName = ''; users = []; groups = []; directRooms = []; profiles = {};
   histories.clear(); summaries.clear(); unread.clear(); typers.clear(); lastMessages.clear();
   document.querySelectorAll('dialog[open]').forEach(dialog => dialog.close());
   $('toasts').replaceChildren(); $('sidebar-search').value = ''; $('message-input').value = '';
+  document.body.classList.remove('chatting');
   $('chat-app').hidden = true; $('login-screen').hidden = false; $('login-error').textContent = message;
   $('sending-state').hidden = true; document.documentElement.style.removeProperty('--accent'); updateTitle();
 }
@@ -473,7 +573,7 @@ $('group-form').onsubmit = async event => {
   try {
     const name = $('group-input').value.trim();
     if (!name || [...name].length > 60 || /\p{Cc}/u.test(name)) throw new Error('Use 1–60 characters without control characters.');
-    const result = await request('group_create', { name }); $('group-input').value = '';
+    const result = await request('group_create', { name }); $('group-input').value = ''; $('create-group-sheet').close();
     await openRoom({ roomId: result.roomId }, name, 'group');
   } catch (error) { $('group-error').textContent = error.message; showError(error); }
   finally { button.disabled = false; }
@@ -498,7 +598,7 @@ function editProfile() {
   draftAvatar = profile.avatar; draftColor = profile.color; $('profile-bio').value = profile.bio;
   renderProfileDraft(); $('profile-editor').showModal();
 }
-$('edit-profile').onclick = editProfile;
+$('edit-profile').onclick = () => { $('me-sheet').close(); editProfile(); };
 for (let index = 0; index < colors.length; index++) {
   const color = colors[index], button = element('button', 'color-option'); button.type = 'button';
   button.style.setProperty('--swatch', color); button.dataset.color = color; button.setAttribute('aria-label', colorNames[index]);
@@ -542,7 +642,7 @@ function renderMembers() {
   for (const name of group.members) {
     const row = element('li', 'member-row'), button = element('button', 'text-button', name); button.type = 'button';
     button.onclick = () => { $('member-list').close(); showProfile(name); };
-    row.append(avatar(name), button, element('small', '', users.includes(name) ? '● Online' : 'Offline'));
+    row.append(avatar(name), button, element('small', '', users.includes(name) ? 'Online' : 'Offline'));
     $('member-list-content').append(row);
   }
 }
@@ -571,20 +671,22 @@ socket.on('message_new', message => {
   if (message.roomId.startsWith('dm:') && !directRooms.some(room => room.roomId === message.roomId)) {
     directRooms.push({ roomId: message.roomId, target: message.roomId.slice(3).split('|').find(name => name !== myName) });
   }
-  if (activeRoom?.roomId === message.roomId) {
+  if (activeRoom?.roomId === message.roomId && !document.hidden) {
     const wasNearBottom = nearBottom(); socket.emit('room_read', { roomId: message.roomId });
     renderMessages(); if (!wasNearBottom) $('new-messages').hidden = false;
-  } else if (message.sender !== myName || !['chat', 'file'].includes(message.kind)) {
+  } else if (message.sender !== myName) {
     unread.set(message.roomId, (unread.get(message.roomId) || 0) + 1);
+    if (message.sender !== myName) announceMessage(message);
   }
+  typers.get(message.roomId)?.delete(message.sender); renderTyping();
   renderLists();
 });
 socket.on('typing_update', ({ roomId, name, typing }) => {
   const people = typers.get(roomId) || new Map();
-  if (typing) people.set(name, Date.now() + 2500); else people.delete(name);
-  typers.set(roomId, people); renderTyping();
+  if (typing) people.set(name, Date.now() + 5000); else people.delete(name);
+  typers.set(roomId, people); renderTyping(); renderLists();
 });
-setInterval(renderTyping, 500);
+
 setInterval(() => { if (myName) renderLists(); }, 60000);
 socket.on('connect', async () => {
   const token = storedToken(); if (!token || explicitLogin) return;
@@ -601,3 +703,25 @@ socket.on('kicked', ({ message }) => {
 socket.on('disconnect', () => { signedOut(sessionToken ? 'Disconnected. Reconnecting automatically…' : $('login-error').textContent); });
 socket.on('connect_error', () => { $('login-error').textContent = 'Cannot reach the server. Check your connection.'; });
 renderMessages(true);
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopTyping();
+  else if (activeRoom) { unread.delete(activeRoom.roomId); socket.emit('room_read', { roomId: activeRoom.roomId }); renderLists(); renderMessages(); }
+});
+const leaveGroup = element('button', 'secondary', 'Leave group'); leaveGroup.type = 'button';
+leaveGroup.onclick = async () => { const room = activeRoom; if (room?.kind !== 'group') return; leaveGroup.disabled = true; try { await request('group_leave', { roomId: room.roomId }); $('member-list').close(); toast('Left ' + room.title); } catch (error) { showError(error); } finally { leaveGroup.disabled = false; } };
+$('member-list-content').after(leaveGroup);
+
+function syncScreens() {
+  const mobile = matchMedia('(max-width: 768px)').matches, open = $('chat-app').classList.contains('room-open');
+  document.querySelector('.sidebar').inert = mobile && open;
+  $('chat-window').inert = mobile && !open;
+}
+window.addEventListener('resize', syncScreens); syncScreens();
+// The AI button starts the message with "@ai " so users discover the AI command.
+$('ai-button').onclick = () => {
+  const input = $('message-input');
+  if (!/^@ai\b/i.test(input.value)) input.value = '@ai ' + input.value.trimStart();
+  input.focus(); input.setSelectionRange(input.value.length, input.value.length); input.dispatchEvent(new Event('input'));
+};
+function memberCount(count) { return count + (count === 1 ? ' member' : ' members'); }
