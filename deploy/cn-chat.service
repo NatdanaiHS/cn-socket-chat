@@ -13,7 +13,7 @@ Environment=PORT=3100
 Environment=DATA_FILE=/var/lib/cn-chat/chat-data.json
 StateDirectory=cn-chat
 EnvironmentFile=/etc/cn-chat.env
-ExecStart=/usr/bin/node server.js
+ExecStart=/usr/local/bin/node server.js
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
