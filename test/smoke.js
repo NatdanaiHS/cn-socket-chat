@@ -42,12 +42,13 @@ async function main() {
     async function client() {
       const socket = connect(url, { forceNew: true, reconnection: false, transports: ['websocket'] });
       clients.push(socket);
-      const log = { messages: [], typing: [], users: [], groups: [] };
+      const log = { messages: [], typing: [], users: [], groups: [], profiles: {} };
       events.set(socket, log);
       socket.on('message_new', m => log.messages.push(m));
       socket.on('typing_update', t => log.typing.push(t));
       socket.on('users_update', u => { log.users = u; });
       socket.on('groups_update', g => { log.groups = g; });
+      socket.on('profiles_update', p => { log.profiles = p; });
       await once(socket, 'connect');
       return socket;
     }
@@ -137,9 +138,9 @@ async function main() {
     await request(alice, 'message_send', { roomId: group, text: 'Members only' });
     await waitUntil(() => events.get(bob).messages.some(m => m.roomId === group), 'R11 member delivery');
     await delay(100);
-    assert.equal(events.get(alice).messages.filter(m => m.roomId === group).length, 1);
+    assert.equal(events.get(alice).messages.filter(m => m.roomId === group && m.kind === 'chat').length, 1);
     assert.equal(events.get(carol).messages.length, 0, 'R11 non-member gets no group messages');
-    assert.equal((await request(bob, 'room_open', { roomId: group })).messages[0].text, 'Members only');
+    assert.equal((await request(bob, 'room_open', { roomId: group })).messages.find(m => m.kind === 'chat').text, 'Members only');
     await request(alice, 'typing', { roomId: group, typing: true });
     await waitUntil(() => events.get(bob).typing.some(t => t.roomId === group && t.typing), 'Group typing');
     assert.equal(events.get(carol).typing.length, 0);
@@ -152,6 +153,66 @@ async function main() {
     await waitUntil(() => events.get(bob).messages.some(m => m.sender === 'AI Bot'), 'AI fallback');
     assert.equal(events.get(carol).messages.length, 0);
 
+
+    // Binary attachments follow the exact same room permissions as text.
+    const bytes = Buffer.from([0, 255, 16, 128, 65]);
+    const groupFileResult = await request(bob, 'file_send', { roomId: group,
+      name: '../notes?.bin', type: 'application/octet-stream', data: bytes });
+    assert.equal(groupFileResult.ok, true);
+    const groupFile = groupFileResult.message.file;
+    assert.equal(groupFileResult.message.kind, 'file');
+    assert.equal(/[\/?]/.test(groupFile.name), false, 'Sanitize download filename');
+    assert.equal(groupFile.size, bytes.length);
+    await waitUntil(() => events.get(alice).messages.some(m => m.file?.id === groupFile.id), 'Member receives file metadata');
+    const fetched = await request(alice, 'file_get', { roomId: group, fileId: groupFile.id });
+    assert.equal(fetched.ok, true);
+    assert.deepEqual(Buffer.from(fetched.data), bytes);
+    for (const outsider of [carol, guest]) {
+      assert.equal((await request(outsider, 'file_get', { roomId: group, fileId: groupFile.id })).ok, false);
+      assert.equal((await request(outsider, 'file_send', { roomId: group, name: 'intrude', data: bytes })).ok, false);
+    }
+    assert.equal((await request(alice, 'file_send', { roomId: group, name: 'large', data: Buffer.alloc(5 * 1024 * 1024 + 1) })).ok, false);
+    assert.equal((await request(alice, 'file_send', { roomId: group, name: 'bad', data: 'not binary' })).ok, false);
+    const limitBytes = Buffer.alloc(5 * 1024 * 1024, 17);
+    const limitUpload = await request(alice, 'file_send', { roomId: group, name: 'exact-limit.bin', data: limitBytes });
+    assert.equal(limitUpload.ok, true, 'Exactly 5 MB is accepted without dropping the socket');
+    assert.deepEqual(Buffer.from((await request(bob, 'file_get', { roomId: group, fileId: limitUpload.message.file.id })).data), limitBytes);
+    const emptyUpload = await request(alice, 'file_send', { roomId: group, name: 'empty.txt', data: Buffer.alloc(0) });
+    assert.equal(emptyUpload.ok, true, 'Empty files are valid files');
+    assert.equal((await request(bob, 'file_get', { roomId: group, fileId: emptyUpload.message.file.id })).data.length, 0);
+    const dmFileResult = await request(alice, 'file_send', { roomId: dm, name: 'private.txt', type: 'text/plain', data: bytes });
+    assert.equal(dmFileResult.ok, true);
+    const dmFile = dmFileResult.message.file;
+    await waitUntil(() => events.get(bob).messages.some(m => m.file?.id === dmFile.id), 'DM participant receives file');
+    assert.deepEqual(Buffer.from((await request(bob, 'file_get', { roomId: dm, fileId: dmFile.id })).data), bytes);
+    assert.equal((await request(carol, 'file_get', { roomId: dm, fileId: dmFile.id })).ok, false);
+    assert.equal((await request(alice, 'file_get', { roomId: dm, fileId: groupFile.id })).ok, false, 'Same participant cannot use a file id from another room');
+    assert.equal((await request(alice, 'file_get', { roomId: group, fileId: dmFile.id })).ok, false);
+    assert.equal((await request(alice, 'file_get', { roomId: group, fileId: '../../secret' })).ok, false);
+    await delay(100);
+    for (const outsider of [carol, guest]) assert.equal(events.get(outsider).messages.some(m => m.kind === 'file'), false);
+    assert.equal((await fetch(url + '/uploads/' + groupFile.id)).status, 404, 'Uploads are never public HTTP assets');
+    await request(alice, 'room_read', { roomId: dm });
+
+    const validProfile = { avatar: null, bio: 'Learning networks 👋', color: '#0f766e' };
+    for (const profile of [
+      { ...validProfile, avatar: 'data:image/png;base64,AAAA' },
+      { ...validProfile, avatar: 'data:image/jpeg;base64,' + 'A'.repeat(60 * 1024) },
+      { ...validProfile, avatar: 'data:image/jpeg;base64,AAAA' },
+      { ...validProfile, bio: 'x'.repeat(81) },
+      { ...validProfile, color: '#ffffff' }
+    ]) assert.equal((await request(alice, 'profile_update', profile)).ok, false, 'Validate public profile');
+    // A small JPEG envelope exercises the allowed MIME/base64 path; canvas is browser-checked.
+    const jpeg = 'data:image/jpeg;base64,' + Buffer.from([255, 216, 255, 217]).toString('base64');
+    assert.equal((await request(alice, 'profile_update', { ...validProfile, avatar: jpeg })).ok, true);
+    await waitUntil(() => events.get(bob).profiles.Alice?.avatar === jpeg, 'JPEG avatar broadcast');
+    assert.equal((await request(alice, 'profile_update', { ...validProfile, username: 'Changed' })).ok, true);
+    await waitUntil(() => [alice, bob, carol].every(s => events.get(s).profiles.Alice?.bio === validProfile.bio), 'Public profile broadcast');
+    assert.deepEqual(events.get(bob).profiles.Alice, validProfile);
+    assert.equal(events.get(guest).profiles.Alice, undefined, 'Unauthenticated guests get no profiles');
+    assert.equal(events.get(bob).profiles.Changed, undefined, 'Profile cannot change identity');
+    assert.equal((await request(bob, 'room_open', { roomId: group })).messages.some(m => m.kind === 'system' && m.text === 'Bob joined the group'), true);
+
     for (let i = 0; i < 205; i++) {
       assert.equal((await request(alice, 'message_send', { roomId: group, text: 'History ' + i })).ok, true);
     }
@@ -160,6 +221,8 @@ async function main() {
     assert.equal(history.messages.at(-1).text, 'History 204');
     assert.equal((await request(bob, 'group_leave', { roomId: group })).ok, true);
     assert.equal((await request(bob, 'room_open', { roomId: group })).ok, false);
+    assert.equal((await request(bob, 'file_get', { roomId: group, fileId: groupFile.id })).ok, false);
+    await waitUntil(() => events.get(alice).messages.some(m => m.kind === 'system' && m.text === 'Bob left the group'), 'Members see leave notice');
     const before = events.get(bob).messages.length;
     await request(alice, 'message_send', { roomId: group, text: 'After leave' });
     await delay(100);
@@ -199,6 +262,9 @@ async function main() {
       assert.equal(savedText.includes(secret), false, 'Only hashes are stored');
     }
     const saved = JSON.parse(savedText);
+    assert.equal(saved.files.find(([id]) => id === groupFile.id)[1].roomId, group);
+    assert.equal(saved.files.some(([, file]) => Object.hasOwn(file, 'data')), false, 'JSON contains metadata only');
+    assert.equal(savedText.includes('"type": "Buffer"'), false, 'Attachment bytes never enter JSON');
     assert.equal(saved.accounts[0].salt.length, 32);
     assert.equal(saved.accounts[0].passwordHash.length, 128);
     assert.notEqual(saved.accounts[0].salt, saved.accounts[1].salt, 'Each account has a random salt');
@@ -212,6 +278,10 @@ async function main() {
     const restoredAlice = await client(), restoredBob = await client(), restoredCarol = await client();
     const restored = await request(restoredAlice, 'resume', { token: aliceToken });
     assert.equal(restored.ok, true, 'Sessions survive restart');
+    assert.deepEqual(restored.profiles.Alice, validProfile, 'Profile survives restart');
+    assert.equal(restored.lastMessages[dm].text, 'Unread across restart');
+    assert.deepEqual(Buffer.from((await request(restoredAlice, 'file_get', { roomId: group, fileId: groupFile.id })).data), bytes, 'File survives restart and history pruning');
+    assert.equal(restored.lastMessages['dm:Bob|Carol'], undefined, 'Previews stay private');
     assert.equal(restored.unread[dm], 1, 'Offline unread count persists across restart');
     assert.deepEqual(restored.groups[0].members, ['Alice']);
     assert.equal(restored.groups[0].creator, 'Alice');
@@ -237,7 +307,11 @@ async function main() {
     await request(restoredBob, 'group_leave', { roomId: group });
     assert.equal((await request(restoredAlice, 'group_leave', { roomId: group })).ok, true);
     await waitUntil(() => events.get(restoredCarol).groups.length === 0, 'Last member leaving deletes group');
-    console.log('PASS: R3–R11 privacy, accounts, sessions, kicks, brute-force limit, offline DMs, persistent groups/history, AI fallback, and restart.');
+    for (const id of [groupFile.id, limitUpload.message.file.id, emptyUpload.message.file.id]) {
+      await assert.rejects(fs.access(path.join(directory, 'uploads', id)), { code: 'ENOENT' });
+    }
+    assert.deepEqual(Buffer.from((await request(restoredAlice, 'file_get', { roomId: dm, fileId: dmFile.id })).data), bytes, 'Deleting group preserves DM files');
+    console.log('PASS: file privacy, size and room validation, disk cleanup, profiles, membership notices; R3–R11 privacy, accounts, sessions, kicks, brute-force limit, offline DMs, persistent groups/history, AI fallback, and restart.');
   } finally {
     clients.forEach(socket => socket.disconnect());
     await new Promise(resolve => io.close(resolve));

@@ -12,7 +12,7 @@ const { Server } = require('socket.io');
 function createChatServer(options = {}) {
   const app = express();
   const server = http.createServer(app);
-  const io = new Server(server);
+  const io = new Server(server, { maxHttpBufferSize: 6 * 1024 * 1024 });
   app.use(express.static(path.join(__dirname, 'public')));
   const users = new Map(); // Socket id -> account username.
   const groups = new Map(); // Room id -> { name, creator, members: Set of usernames }.
@@ -23,6 +23,21 @@ function createChatServer(options = {}) {
   const sessions = new Map(); // SHA-256 token hash -> { username, expiresAt }.
   const failures = new Map(); // Lowercase username -> recent failed login timestamps.
   const dataFile = path.resolve(options.dataFile || process.env.DATA_FILE || './data/chat-data.json');
+  const uploadDirectory = path.join(path.dirname(dataFile), 'uploads');
+  const files = new Map(); // File id -> metadata and owning room; bytes stay outside JSON.
+  const colors = ['#4f46e5', '#2563eb', '#0f766e', '#a21caf', '#be123c', '#b45309'];
+  function defaultProfile(name) {
+    let hash = 0;
+    for (const character of name) hash = ((hash * 31) + character.codePointAt(0)) >>> 0;
+    return { avatar: null, bio: '', color: colors[hash % colors.length] };
+  }
+  function publicProfiles() {
+    return Object.fromEntries([...accounts.values()].map(a => [a.username, a.profile || defaultProfile(a.username)]));
+  }
+  function broadcastProfiles() {
+    const profiles = publicProfiles();
+    for (const id of users.keys()) io.to(id).emit('profiles_update', profiles);
+  }
   const tokenHash = token => createHash('sha256').update(token).digest('hex');
   let saveTimer;
 
@@ -36,13 +51,14 @@ function createChatServer(options = {}) {
     for (const [id, group] of data.groups) groups.set(id, { ...group, members: new Set(group.members) });
     for (const [id, messages] of data.histories) histories.set(id, messages.slice(-200));
     for (const [id, names] of data.directRooms) directRooms.set(id, names);
+    for (const [id, file] of data.files || []) files.set(id, file);
   }
   function flush() {
     clearTimeout(saveTimer);
     const data = {
       accounts: [...accounts.values()], sessions: [...sessions],
       groups: [...groups].map(([id, group]) => [id, { ...group, members: [...group.members] }]),
-      histories: [...histories], directRooms: [...directRooms]
+      histories: [...histories], directRooms: [...directRooms], files: [...files]
     };
     fs.mkdirSync(path.dirname(dataFile), { recursive: true });
     const temporary = dataFile + '.tmp';
@@ -78,7 +94,10 @@ function createChatServer(options = {}) {
     return { name, token, users: userList(), groups: groupList(),
       directRooms: [...directRooms].filter(([, names]) => names.includes(name))
         .map(([roomId, names]) => ({ roomId, target: names.find(n => n !== name) })),
-      unread: accountFor(name).unread || {} };
+      unread: accountFor(name).unread || {}, profiles: publicProfiles(),
+      lastMessages: Object.fromEntries([...histories]
+        .filter(([id]) => groups.get(id)?.members.has(name) || directRooms.get(id)?.includes(name))
+        .map(([id, messages]) => [id, messages.at(-1)])) };
   }
   async function authenticate(socket, name, token, hash) {
     // Remove the old transport before joining rooms, so there is one live account.
@@ -93,6 +112,7 @@ function createChatServer(options = {}) {
       if (group.members.has(name)) await socket.join(roomId);
     }
     broadcastLists();
+    broadcastProfiles();
     return sessionResult(name, token);
   }
   async function newSession(socket, name) {
@@ -131,9 +151,9 @@ function createChatServer(options = {}) {
     if (groups.has(roomId)) return groups.get(roomId).members.has(users.get(socket.id));
     return directRooms.get(roomId)?.includes(users.get(socket.id)) || false;
   }
-  function saveMessage(roomId, sender, text, kind = 'chat') {
+  function saveMessage(roomId, sender, text, kind = 'chat', extra = {}) {
     const message = { id: randomUUID(), roomId, sender, text,
-      time: new Date().toISOString(), kind };
+      time: new Date().toISOString(), kind, ...extra };
     histories.set(roomId, [...(histories.get(roomId) || []), message].slice(-200));
     scheduleSave();
     return message;
@@ -142,7 +162,7 @@ function createChatServer(options = {}) {
     if (event === 'message_new') {
       const recipients = groups.get(roomId)?.members || directRooms.get(roomId) || [];
       for (const name of recipients) {
-        if (name === payload.sender && payload.kind === 'chat') continue;
+        if (name === payload.sender && ['chat', 'file'].includes(payload.kind)) continue;
         const account = accountFor(name);
         account.unread ||= {};
         account.unread[roomId] = (account.unread[roomId] || 0) + 1;
@@ -224,7 +244,7 @@ function createChatServer(options = {}) {
       // Another socket may have registered this spelling while scrypt was running.
       if (accountFor(username)) throw new Error('That username is already in use.');
       if (!socket.connected) throw new Error('Disconnected. Please try again.');
-      accounts.set(username.toLowerCase(), { username, salt, passwordHash: key.toString('hex'), unread: {} });
+      accounts.set(username.toLowerCase(), { username, salt, passwordHash: key.toString('hex'), unread: {}, profile: defaultProfile(username) });
       return newSession(socket, username);
     });
     handle('login', async ({ username, password }) => {
@@ -266,6 +286,56 @@ function createChatServer(options = {}) {
       scheduleSave();
       return {};
     });
+    handle('profile_update', ({ avatar, bio, color }) => {
+      if (typeof bio !== 'string' || [...bio].length > 80) throw new Error('Bio must be at most 80 characters.');
+      if (!colors.includes(color)) throw new Error('Choose one of the six accent colours.');
+      if (avatar !== null) {
+        if (typeof avatar !== 'string' || Buffer.byteLength(avatar, 'utf8') > 60 * 1024 ||
+            !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(avatar)) {
+          throw new Error('Profile photo must be a JPEG data URL no larger than 60 KB.');
+        }
+        const bytes = Buffer.from(avatar.slice('data:image/jpeg;base64,'.length), 'base64');
+        if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8 ||
+            bytes[bytes.length - 2] !== 0xff || bytes[bytes.length - 1] !== 0xd9 ||
+            bytes.toString('base64') !== avatar.slice('data:image/jpeg;base64,'.length)) {
+          throw new Error('Profile photo must contain a valid JPEG.');
+        }
+      }
+      const profile = { avatar, bio: bio.trim(), color };
+      accountFor(users.get(socket.id)).profile = profile;
+      scheduleSave();
+      broadcastProfiles();
+      return { profile };
+    });
+    handle('file_send', ({ roomId, name, type, data }) => {
+      requireRoom(roomId);
+      if (!Buffer.isBuffer(data) && !(data instanceof ArrayBuffer)) throw new Error('Choose a file to send.');
+      const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      if (bytes.length > 5 * 1024 * 1024) throw new Error('That file is too large. The maximum size is 5 MB.');
+      if (typeof name !== 'string' || !name.trim()) throw new Error('A file name is required.');
+      // Strip path separators, control characters and Windows reserved filename characters.
+      name = name.replace(/[\\/<>:"|?*\p{Cc}]/gu, '_').replace(/^\.+|[. ]+$/g, '').trim().slice(0, 180) || 'file';
+      type = typeof type === 'string' && /^[\w.+-]+\/[\w.+-]+$/.test(type) && type.length <= 100
+        ? type.toLowerCase() : 'application/octet-stream';
+      const file = { id: randomUUID(), name, type, size: bytes.length };
+      fs.mkdirSync(uploadDirectory, { recursive: true });
+      fs.writeFileSync(path.join(uploadDirectory, file.id), bytes, { flag: 'wx', mode: 0o600 });
+      files.set(file.id, { roomId, ...file });
+      const message = saveMessage(roomId, users.get(socket.id), '', 'file', { file });
+      deliver(roomId, 'message_new', message);
+      deliver(roomId, 'typing_update', { roomId, name: users.get(socket.id), typing: false }, socket.id);
+      return { message };
+    });
+    handle('file_get', ({ roomId, fileId }) => {
+      requireRoom(roomId);
+      const file = files.get(fileId);
+      if (!file || file.roomId !== roomId) throw new Error('That file does not belong to this room.');
+      try {
+        return { file: { id: file.id, name: file.name, type: file.type, size: file.size },
+          data: fs.readFileSync(path.join(uploadDirectory, file.id)) };
+      } catch { throw new Error('That file is no longer available.'); }
+    });
+
     handle('room_read', ({ roomId }) => {
       requireRoom(roomId);
       delete (accountFor(users.get(socket.id)).unread || {})[roomId];
@@ -311,10 +381,12 @@ function createChatServer(options = {}) {
     handle('group_join', async ({ roomId }) => {
       const group = groups.get(roomId);
       if (!group) throw new Error('That group no longer exists.');
+      const joined = !group.members.has(users.get(socket.id));
       group.members.add(users.get(socket.id));
       scheduleSave();
       await socket.join(roomId);
       broadcastLists();
+      if (joined) deliver(roomId, 'message_new', saveMessage(roomId, users.get(socket.id), users.get(socket.id) + ' joined the group', 'system'));
       return { roomId };
     });
     handle('group_leave', async ({ roomId }) => {
@@ -326,7 +398,17 @@ function createChatServer(options = {}) {
       delete (accountFor(users.get(socket.id)).unread || {})[roomId];
       scheduleSave();
       await socket.leave(roomId);
-      if (!group.members.size) { groups.delete(roomId); histories.delete(roomId); }
+      if (!group.members.size) {
+        // The registry also includes attachments older than the 200-message history.
+        for (const [id, file] of files) {
+          if (file.roomId !== roomId) continue;
+          fs.rmSync(path.join(uploadDirectory, id), { force: true });
+          files.delete(id);
+        }
+        groups.delete(roomId); histories.delete(roomId);
+      } else {
+        deliver(roomId, 'message_new', saveMessage(roomId, users.get(socket.id), users.get(socket.id) + ' left the group', 'system'));
+      }
       broadcastLists();
       return { roomId };
     });
@@ -359,7 +441,7 @@ function createChatServer(options = {}) {
     handle('ai_summarize', async ({ roomId }) => {
       requireRoom(roomId);
       const transcript = (histories.get(roomId) || []).slice(-50)
-        .map(m => m.sender + ': ' + m.text).join('\n');
+        .map(m => m.sender + ': ' + (m.kind === 'file' ? '[File: ' + m.file.name + ']' : m.text)).join('\n');
       if (!transcript) throw new Error('There are no messages to summarize yet.');
       const originalGroup = groups.get(roomId);
       const originalDM = directRooms.get(roomId);

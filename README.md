@@ -1,4 +1,4 @@
-# Campus Chat — Simple Chat Application
+# WongChat — Simple Chat Application
 
 A university Computer Network term project built with Node.js 20+, CommonJS,
 Express static hosting, and Socket.IO v4. The browser uses plain HTML, CSS and
@@ -61,19 +61,32 @@ message delivers an event to the chosen socket ids or group. Acknowledgements
 return success or validation errors. Disconnect removes online presence while preserving account data.
 See [docs/PROTOCOL.md](docs/PROTOCOL.md) for every event and payload.
 
-## Bonus features
+## Special points and product features
 
-- Summarize in any open room sends ai_summarize. Gemini summarizes the last 50
-  messages and returns a local AI message only to the requester.
-- In a joined group, send @ai Explain TCP to ask Gemini. AI Bot replies only to
-  that group. No configured key, failed requests and the 20-second timeout produce
-  friendly errors. No external AI request is made without a configured key.
-- Typing indicators follow the same access and delivery rules as messages and
-  exclude the sender. Indicators expire if a stop event is lost.
-- Unread badges count messages received while a room is closed. The server stores
-  the last 200 messages per room and checks access before sending history.
-- Responsive layout supports narrow phone screens. User-supplied text is rendered
-  with textContent, including AI output; HTML in messages is displayed as text.
+- **AI:** Gemini summarizes the open room privately for the requester. In a group,
+  send @ai Explain TCP for a reply visible only to members. Missing keys, timeouts
+  and upstream errors produce friendly messages.
+- **File sharing:** send any file up to 5 MB using 📎, drag-and-drop or image paste.
+  PNG/JPEG/GIF/WebP have thumbnails and a full-size lightbox with Download; other
+  files have name/size/download cards. Binary uploads and authorized downloads
+  use Socket.IO only; uploads never have public HTTP URLs.
+- **Accounts and persistence:** scrypt passwords, hashed seven-day sessions, saved
+  memberships, history, unread counts, profiles and private attachment metadata.
+- **Profiles and themes:** edit a 128×128 JPEG avatar, 80-character bio and one of
+  six accent colours. Profile cards show presence and a Message action. Light,
+  Dark and System themes apply before first paint and persist in localStorage.
+  All six accents meet WCAG AA contrast with white text.
+- **Typing and unread:** private typing indicators expire if a stop event is lost.
+  Saved unread badges and the browser tab total update as conversations are read.
+- **Chat UI:** searchable people/groups, offline DM history, message previews,
+  relative times, stacked member avatars, date separators, grouped messages,
+  join/leave notices, emoji picker, multiline composer, loading skeletons, toasts
+  and a scroll-aware new-message pill. At 768 px and below, Back returns to the
+  conversation list. Keyboard focus and reduced-motion preferences are supported.
+- **Cloud deployment:** systemd and Caddy templates support a single persistent
+  Node.js service, HTTPS and Socket.IO upgrades. Deployment remains an
+  administrator operation; these templates do not deploy the app.
+- User text and AI output use textContent, so HTML is displayed as plain text.
 
 ## Accounts and persistence
 
@@ -107,27 +120,38 @@ tokens are never written to the file or logged.
 
 Groups save their creator and member usernames. Disconnect, logout and restart keep
 membership; login/resume subscribes the new socket to all joined groups. Click Leave
-to remove membership; only the last member leaving deletes a group and its history.
+to remove membership; only the last member leaving deletes a group, its history and files.
 A newly joined member can read existing group history. Member lists show all names
 and mark who is online. Online users lists only currently connected accounts,
 including yourself.
 
 DM ids use the two account usernames, and histories survive offline periods and
 restarts. Start a new DM with an online user. Existing conversations remain available
-when the other person is offline, including an Offline conversations sidebar entry
+when the other person is offline, in the Direct messages sidebar section
 and an "(offline)" header. Sending while they are offline stores the message; they
 see an unread badge next login. History is capped at 200 messages per room. Unread
 counts persist and clear when a room is opened/read; typing and local AI summaries
-are transient. No database server or file uploads are required.
+are transient. No database server is required. File bytes live next to DATA_FILE in uploads/<uuid>;
+back up that directory with the JSON. The file registry keeps attachment metadata
+beyond history pruning. Last-member group deletion removes every attachment for
+that group; DM files remain private to the two participants.
 
 ## Tests
 
-Run npm test. test/smoke.js uses node:assert and socket.io-client, starts an
+Run npm test. Check browser JavaScript syntax with node --check public/client.js. test/smoke.js uses node:assert and socket.io-client, starts an
 isolated server on a random loopback port, and closes every socket/server on exit.
 It checks R3–R11, forbidden DM/group/history/typing access, self-only membership,
 history limits, self leave, registration/duplicate names, password rejection,
 resume/logout, second-login kicks, brute-force limits, offline delivery/unread counts,
 persistent membership, reload in a new server instance, and hash-only saved credentials.
+It also checks binary file send/fetch, outsider rejection, cross-room IDs, size limits,
+non-public upload paths, profile validation/broadcast, join/leave notices, attachment
+and profile persistence, history pruning and group-file cleanup.
+It also checks binary file round trips, non-member/third-user denial and delivery
+privacy, oversized and malformed uploads, cross-room file ids, public HTTP denial,
+file persistence past history pruning, disk cleanup on group deletion, profile
+validation/broadcast/persistence, immutable usernames, and member-only join/leave
+notices. Existing accounts without profile/file fields load with defaults.
 Each run uses and removes a temporary DATA_FILE under the OS temp directory. Tests force
 an empty API key so Gemini is never contacted. Exit code 0 means all checks passed.
 
@@ -147,3 +171,9 @@ unless intentionally changing them.
 deploy/Caddyfile.snippet configures chat.natdanaihs.com to reverse proxy
 127.0.0.1:3100, including Socket.IO upgrades on its default path. DNS, TLS,
 service installation and production deployment are separate administrator tasks.
+
+The UI uses Inter from Google Fonts with system fallbacks if unavailable. All chat,
+profile and attachment data still travels only through Socket.IO. No build step or
+new npm dependencies are needed. Enter sends, Shift+Enter adds a line; keyboard
+focus rings and reduced-motion preferences are supported. At 768 px and below,
+Back returns from a room to the conversation list. Unread totals appear in the tab title.

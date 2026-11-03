@@ -7,3 +7,7 @@ node_modules/
 .claude/
 
 data/
+
+# Local browser verification artifacts
+.playwright-cli/
+output/playwright/
