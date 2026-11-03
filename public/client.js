@@ -12,6 +12,7 @@ function icon(name) {
     smile: ['M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0ZM8 14s1 3 4 3 4-3 4-3M8 9h.01M16 9h.01'],
     sparkles: ['m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5ZM20 2v4m-2-2h4'],
     users: ['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M22 21v-2a4 4 0 0 0-3-3.9','M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM17 3a4 4 0 0 1 0 8'],
+    image: ['M3 3h18v18H3Z','m3 17 6-6 4 4 3-3 5 5M8 7h.01'],
     file: ['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M8 13h8M8 17h5'],
     download: ['M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5'],
     sun: ['M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8ZM12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1'],
@@ -61,6 +62,7 @@ function announceMessage(message) {
   const title = group?.name || message.roomId.slice(3).split('|').find(n => n !== myName);
   const open = () => { dismissBanner(); void openRoom({ roomId: message.roomId }, title, group ? 'group' : 'private'); };
   const copy = element('span', 'banner-copy'); copy.append(element('strong', '', message.roomId.startsWith('group:') ? message.sender + ' · ' + message.roomId.slice(6) : message.sender), element('span', '', preview(message)));
+  photoIcon(copy.lastChild, message);
   $('banner-open').replaceChildren(avatar(message.sender, '', false), copy); $('banner-open').onclick = open;
   $('message-banner').hidden = false; clearTimeout(bannerTimer); bannerTimer = setTimeout(dismissBanner, 4000);
   if (notificationsEnabled && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
@@ -88,7 +90,7 @@ let typingTimer, lastTypingSent = 0, sendingCount = 0;
 let draftAvatar = null, draftColor = colors[0], photoVersion = 0;
 const tokenStorageKey = 'campus-chat-token';
 const histories = new Map(), summaries = new Map(), unread = new Map(), typers = new Map();
-const lastMessages = new Map();
+const lastMessages = new Map(), readStates = new Map();
 const fileURLs = new Map(); // Room + file -> private Blob URL, revoked on leave/logout.
 let themeChoice = 'system';
 try { themeChoice = localStorage.getItem('campus-chat-theme') || 'system'; } catch {}
@@ -209,8 +211,10 @@ function relativeTime(time) {
 }
 function preview(message) {
   if (!message) return '';
-  return (message.sender === myName && message.kind !== 'system' ? 'You: ' : '') + (message.kind === 'file' ? 'File: ' + message.file.name : message.text);
+  return (message.sender === myName && message.kind !== 'system' ? 'You: ' : '') + (message.kind === 'file' ? (isImage(message.file) ? 'Photo' : 'File: ' + message.file.name) : message.text);
 }
+function isImage(file) { return ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file?.type); }
+function photoIcon(node, message) { if (isImage(message?.file)) node.prepend(icon('image')); return node; }
 function makeRow(name, roomId, open, fallback, group = false) {
   const li = element('li', 'list-row' + (activeRoom?.roomId === roomId ? ' selected' : '') + (unread.get(roomId) ? ' unread' : ''));
   const groupAvatar = element('span', 'avatar'); groupAvatar.append(icon('users')); li.append(group ? groupAvatar : avatar(name));
@@ -224,6 +228,7 @@ function makeRow(name, roomId, open, fallback, group = false) {
   }
   const typing = typingNames(roomId).length > 0;
   copy.append(top, element('span', 'row-preview' + (typing ? ' is-typing' : ''), typing ? 'typing…' : preview(last) || fallback));
+  if (!typing) photoIcon(copy.lastChild, last);
   button.append(copy); button.onclick = open;
   if (unread.get(roomId)) button.append(element('span', 'badge', String(unread.get(roomId))));
   li.append(button);
@@ -306,7 +311,7 @@ async function openRoom(payload, title, kind) {
   $('messages').replaceChildren(); $('messages').setAttribute('aria-busy', 'true');
   for (let i = 0; i < 4; i++) $('messages').append(element('div', 'skeleton'));
   try {
-    const result = await request('room_open', payload);
+    const result = await request('room_open', { ...payload, read: document.visibilityState === 'visible' });
     if (version !== openingVersion) return;
     activeRoom = { roomId: result.roomId, title, kind };
     const combined = new Map(result.messages.map(message => [message.id, message]));
@@ -316,11 +321,12 @@ async function openRoom(payload, title, kind) {
     }
     const messages = [...combined.values()].sort((a, b) => a.time.localeCompare(b.time)).slice(-200);
     histories.set(result.roomId, messages);
+    readStates.set(result.roomId, result.readState || {});
     if (messages.length) lastMessages.set(result.roomId, messages.at(-1));
     if (kind === 'private' && !directRooms.some(room => room.roomId === result.roomId)) directRooms.push({ roomId: result.roomId, target: title });
     const incoming = messages.filter(message => message.sender !== myName);
     firstUnreadId = unreadCount ? incoming[Math.max(0, incoming.length - unreadCount)]?.id : null;
-    unread.delete(result.roomId); socket.emit('room_read', { roomId: result.roomId });
+    markOpenRead();
     setComposer(true); $('message-input').value = ''; growComposer();
     $('new-messages').hidden = true; renderLists(); renderMessages(true);
     if (firstUnreadId) requestAnimationFrame(() => $('unread-divider')?.scrollIntoView({ block: 'start' }));
@@ -333,7 +339,13 @@ $('back-button').onclick = () => { if (history.state?.wongchat === 'room') histo
 function nearBottom() { const node = $('messages'); return node.scrollHeight - node.scrollTop - node.clientHeight < 100; }
 function scrollBottom() { $('messages').scrollTop = $('messages').scrollHeight; $('new-messages').hidden = true; }
 $('new-messages').onclick = scrollBottom;
-$('messages').onscroll = () => { if (nearBottom()) $('new-messages').hidden = true; };
+function markOpenRead() {
+  if (!activeRoom || document.visibilityState !== 'visible') return;
+  const roomId = activeRoom.roomId, messageId = histories.get(roomId)?.at(-1)?.id;
+  unread.delete(roomId);
+  if (messageId) socket.emit('room_read', { roomId, messageId });
+}
+$('messages').onscroll = () => { if (nearBottom()) { $('new-messages').hidden = true; markOpenRead(); updateTitle(); } };
 function dateLabel(time) {
   const date = new Date(time), today = new Date(), yesterday = new Date(); yesterday.setDate(today.getDate() - 1);
   if (date.toDateString() === today.toDateString()) return 'Today';
@@ -363,13 +375,14 @@ function renderMessages(forceBottom = false) {
       const grouped = sameGroup(messages[index - 1], message), last = !sameGroup(message, messages[index + 1]);
       const row = element('div', 'message-row' + (own ? ' own' : '') + (grouped ? ' grouped' : '') + (message.kind === 'ai' ? ' ai' : ''));
       if (!own) { const slot = element('span', 'message-avatar'); if (last && message.kind !== 'ai') slot.append(avatar(message.sender, 'small')); row.append(slot); }
-      const stack = element('div', 'bubble-stack'), article = element('article', 'message' + (message.kind === 'file' ? ' attachment' : ''));
+      const stack = element('div', 'bubble-stack'), article = element('article', 'message' + (message.kind === 'file' ? (isImage(message.file) ? ' photo-message' : ' attachment') : ''));
       if (!own && !grouped && activeRoom.kind === 'group' && message.kind !== 'ai') {
         const name = element('button', 'message-name', message.sender); name.type = 'button'; name.onclick = () => showProfile(message.sender); stack.append(name);
       }
       if (message.kind === 'ai') { const chip = element('span', 'ai-chip', 'AI'); chip.prepend(icon('sparkles')); stack.append(chip); }
       if (message.kind === 'file') article.append(fileContent(message)); else article.append(element('p', 'message-text', message.text));
       stack.append(article);
+      if (own) { row.dataset.messageId = message.id; stack.dataset.ownMessage = message.id; }
       const time = element('time', '', new Date(message.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); time.dateTime = message.time;
       if (own && last) row.append(time);
       row.append(stack); if (!own && last) row.append(time);
@@ -377,7 +390,7 @@ function renderMessages(forceBottom = false) {
     });
   }
   if (shouldScroll) scrollBottom(); else $('messages').scrollTop = position;
-  renderTyping();
+  renderReceipts(); renderTyping();
 }
 function fileSize(size) { return size < 1024 ? size + ' B' : size < 1024 * 1024 ? (size / 1024).toFixed(1) + ' KB' : (size / (1024 * 1024)).toFixed(1) + ' MB'; }
 function roomAllowed(roomId) {
@@ -405,15 +418,25 @@ function forgetFiles(roomId) {
 function fileContent(message) {
   const { file, roomId } = message;
   const content = element('div');
-  if (['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type)) {
-    const button = element('button', 'image-button'); button.type = 'button'; button.setAttribute('aria-label', 'Open image ' + file.name);
-    const status = element('span', 'image-status', 'Loading image…'); button.append(status); content.append(button);
+  if (isImage(file)) {
+    const button = element('button', 'image-button loading'); button.type = 'button';
+    button.setAttribute('aria-label', 'Open image ' + file.name);
+    const width = file.width || 240, height = file.height || 180;
+    const displayWidth = Math.min(width, 260), displayHeight = Math.min(height * displayWidth / width, 320);
+    button.style.width = displayWidth + 'px'; button.style.aspectRatio = displayWidth + ' / ' + displayHeight;
+    button.setAttribute('aria-busy', 'true');
+    const unavailable = () => {
+      button.classList.remove('loading'); button.removeAttribute('aria-busy');
+      button.onclick = null; button.disabled = true; button.setAttribute('aria-label', 'Image unavailable');
+      button.replaceChildren(element('span', 'image-status', 'Image unavailable'));
+    };
     fileURL(roomId, file).then(url => {
       if (!button.isConnected) return;
-      const follow = nearBottom();
-      const image = element('img', 'image-preview'); image.onload = () => { if (follow && button.isConnected) scrollBottom(); }; image.src = url; image.alt = file.name;
-      image.onerror = () => { button.replaceChildren(element('span', 'image-status', 'Image preview unavailable. Download below.')); };
-      button.replaceChildren(image);
+      const image = element('img', 'image-preview'); image.alt = 'Shared photo';
+      image.width = width; image.height = height;
+      image.style.objectFit = height * displayWidth / width > 320 ? 'cover' : 'contain';
+      image.onload = () => { button.classList.remove('loading'); button.removeAttribute('aria-busy'); };
+      image.onerror = unavailable; button.append(image); image.src = url;
       button.onclick = () => {
         if (!roomAllowed(roomId)) return;
         $('lightbox-image').src = url; $('lightbox-image').alt = file.name;
@@ -421,10 +444,12 @@ function fileContent(message) {
         $('lightbox-download').href = url; $('lightbox-download').download = file.name;
         $('lightbox').showModal();
       };
-    }).catch(error => { if (button.isConnected) { status.textContent = 'Preview unavailable. Click to retry.'; button.onclick = () => { button.replaceWith(fileContent(message)); showError(error); }; } });
+    }).catch(() => { if (button.isConnected) unavailable(); });
+    return button;
   }
   const card = element('div', 'file-card'); card.append(icon('file'));
-  const info = element('span', 'file-info'); info.append(element('strong', '', file.name), element('small', '', fileSize(file.size)));
+  const info = element('span', 'file-info'); info.append(element('strong', '', middleFilename(file.name)), element('small', '', fileSize(file.size)));
+  info.firstChild.title = file.name;
   const download = element('button', 'file-download'); download.append(icon('download')); download.setAttribute('aria-label', 'Download ' + file.name); download.type = 'button';
   download.onclick = async () => {
     download.disabled = true;
@@ -436,16 +461,54 @@ function fileContent(message) {
   };
   card.append(info, download); content.append(card); return content;
 }
+function middleFilename(name) { return name.length > 36 ? name.slice(0, 20) + '…' + name.slice(-12) : name; }
+async function preparePhoto(file) {
+  if (!isImage(file)) return { file };
+  const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  try {
+    let width = bitmap.width, height = bitmap.height;
+    if (file.type === 'image/gif' || (file.size <= 400 * 1024 && Math.max(width, height) <= 2048)) {
+      return { file, width, height };
+    }
+    const scale = Math.min(1, 2048 / Math.max(width, height));
+    width = Math.max(1, Math.round(width * scale)); height = Math.max(1, Math.round(height * scale));
+    const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
+    const context = canvas.getContext('2d'); context.drawImage(bitmap, 0, 0, width, height);
+    const encode = type => new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not compress this photo.')), type, .85));
+    let blob;
+    if (file.type === 'image/png') {
+      const pixels = context.getImageData(0, 0, width, height).data;
+      let transparent = false;
+      for (let i = 3; i < pixels.length; i += 4) if (pixels[i] < 255) { transparent = true; break; }
+      if (transparent) { const png = await encode('image/png'); if (png.size <= 1.5 * 1024 * 1024) blob = png; }
+    }
+    if (!blob) {
+      context.globalCompositeOperation = 'destination-over'; context.fillStyle = '#ffffff'; context.fillRect(0, 0, width, height);
+      blob = await encode('image/jpeg');
+    }
+    const extension = blob.type === 'image/png' ? '.png' : '.jpg';
+    const base = file.name.replace(/\.[^.]+$/, '');
+    const randomName = base.length > 24 && base.replace(/[^0-9a-f]/gi, '').length > 24;
+    const date = new Date(), pad = n => String(n).padStart(2, '0');
+    const name = randomName ? 'photo-' + date.getFullYear() + pad(date.getMonth()+1) + pad(date.getDate()) + '-' + pad(date.getHours()) + pad(date.getMinutes()) + extension : base + extension;
+    return { file: new File([blob], name, { type: blob.type }), width, height };
+  } finally { bitmap.close(); }
+}
 async function sendFile(file) {
   if (!activeRoom) return toast('Choose a conversation before sharing a file.', true);
-  if (file.size > 5 * 1024 * 1024) return toast('That file is too large. The maximum size is 5 MB.', true);
+  if (file.size > 5 * 1024 * 1024 && !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return toast('That file is too large. The maximum size is 5 MB.', true);
   stopTyping();
   const roomId = activeRoom.roomId, version = accountVersion;
   sendingCount++; $('sending-state').hidden = false; $('sending-state').textContent = 'Sending… ' + file.name;
   try {
+    $('sending-state').textContent = isImage(file) && file.type !== 'image/gif' ? 'Preparing photo…' : 'Sending… ' + file.name;
+    const prepared = await preparePhoto(file); file = prepared.file;
+    if (file.size > 5 * 1024 * 1024) throw new Error('That file is too large. The maximum size is 5 MB.');
+    if (version !== accountVersion) return;
+    $('sending-state').textContent = 'Sending… ' + file.name;
     const data = await file.arrayBuffer();
     if (version !== accountVersion) return;
-    await request('file_send', { roomId, name: file.name, type: file.type || 'application/octet-stream', data });
+    await request('file_send', { roomId, name: file.name, type: file.type || 'application/octet-stream', data, width: prepared.width, height: prepared.height });
   } catch (error) { if (version === accountVersion) showError(error); }
   finally { sendingCount = Math.max(0, sendingCount - 1); $('sending-state').hidden = !sendingCount; }
 }
@@ -544,7 +607,7 @@ function signedOut(message) {
   dismissBanner(); clearTimeout(typingExpiryTimer); typingSignature = ''; $('typing-text').textContent = ''; $('typing-indicator').classList.remove('is-visible');
   if (history.state?.wongchat === 'room') history.replaceState({ wongchat: 'list' }, '');
   myName = ''; users = []; groups = []; directRooms = []; profiles = {};
-  histories.clear(); summaries.clear(); unread.clear(); typers.clear(); lastMessages.clear();
+  readStates.clear(); histories.clear(); summaries.clear(); unread.clear(); typers.clear(); lastMessages.clear();
   document.querySelectorAll('dialog[open]').forEach(dialog => dialog.close());
   $('toasts').replaceChildren(); $('sidebar-search').value = ''; $('message-input').value = '';
   document.body.classList.remove('chatting');
@@ -659,7 +722,7 @@ socket.on('groups_update', list => {
   const cached = new Set([...histories.keys(), ...unread.keys(), ...lastMessages.keys()]);
   for (const id of cached) {
     if (id.startsWith('group:') && !groups.some(g => g.roomId === id && g.members.includes(myName))) {
-      histories.delete(id); summaries.delete(id); unread.delete(id); typers.delete(id); lastMessages.delete(id); forgetFiles(id);
+      readStates.delete(id); histories.delete(id); summaries.delete(id); unread.delete(id); typers.delete(id); lastMessages.delete(id); forgetFiles(id);
     }
   }
   renderLists(); if ($('member-list').open) renderMembers();
@@ -671,8 +734,8 @@ socket.on('message_new', message => {
   if (message.roomId.startsWith('dm:') && !directRooms.some(room => room.roomId === message.roomId)) {
     directRooms.push({ roomId: message.roomId, target: message.roomId.slice(3).split('|').find(name => name !== myName) });
   }
-  if (activeRoom?.roomId === message.roomId && !document.hidden) {
-    const wasNearBottom = nearBottom(); socket.emit('room_read', { roomId: message.roomId });
+  if (activeRoom?.roomId === message.roomId && document.visibilityState === 'visible') {
+    const wasNearBottom = nearBottom(); markOpenRead();
     renderMessages(); if (!wasNearBottom) $('new-messages').hidden = false;
   } else if (message.sender !== myName) {
     unread.set(message.roomId, (unread.get(message.roomId) || 0) + 1);
@@ -706,7 +769,7 @@ renderMessages(true);
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) stopTyping();
-  else if (activeRoom) { unread.delete(activeRoom.roomId); socket.emit('room_read', { roomId: activeRoom.roomId }); renderLists(); renderMessages(); }
+  else if (activeRoom && document.visibilityState === 'visible') { markOpenRead(); renderLists(); renderMessages(); }
 });
 const leaveGroup = element('button', 'secondary', 'Leave group'); leaveGroup.type = 'button';
 leaveGroup.onclick = async () => { const room = activeRoom; if (room?.kind !== 'group') return; leaveGroup.disabled = true; try { await request('group_leave', { roomId: room.roomId }); $('member-list').close(); toast('Left ' + room.title); } catch (error) { showError(error); } finally { leaveGroup.disabled = false; } };
@@ -725,3 +788,53 @@ $('ai-button').onclick = () => {
   input.focus(); input.setSelectionRange(input.value.length, input.value.length); input.dispatchEvent(new Event('input'));
 };
 function memberCount(count) { return count + (count === 1 ? ' member' : ' members'); }
+
+function readersFor(message) {
+  const messages = histories.get(message.roomId) || [], index = messages.findIndex(m => m.id === message.id);
+  const members = groups.find(g => g.roomId === message.roomId)?.members || message.roomId.slice(3).split('|');
+  return members.filter(name => name !== myName && messages.findIndex(m => m.id === readStates.get(message.roomId)?.[name]) >= index);
+}
+function renderReadSheet() {
+  const roomId = $('read-sheet').dataset.roomId, messageId = $('read-sheet').dataset.messageId;
+  const message = histories.get(roomId)?.find(m => m.id === messageId);
+  if (!message || !roomAllowed(roomId)) { $('read-sheet').close(); return; }
+  const list = $('read-list'); list.replaceChildren();
+  for (const name of readersFor(message)) {
+    const row = element('li', 'member-row'); row.append(avatar(name, '', false), element('span', '', name)); list.append(row);
+  }
+  if (!list.childElementCount) list.append(element('li', 'muted', 'No readers yet.'));
+}
+function renderReceipts() {
+  $('messages').querySelectorAll('.read-receipt').forEach(node => node.remove());
+  if (!activeRoom) return;
+  const own = (histories.get(activeRoom.roomId) || []).filter(m => m.sender === myName && ['chat', 'file'].includes(m.kind));
+  const latest = own.at(-1), latestRead = own.findLast(m => readersFor(m).length);
+  for (const stack of $('messages').querySelectorAll('[data-own-message]')) {
+    const message = own.find(m => m.id === stack.dataset.ownMessage);
+    if (!message) continue;
+    const readers = readersFor(message);
+    if (activeRoom.kind === 'group') {
+      if (message !== latest) continue;
+      const receipt = element('button', 'read-receipt', 'Read by ' + readers.length); receipt.type = 'button';
+      receipt.onclick = () => {
+        $('read-sheet').dataset.roomId = message.roomId; $('read-sheet').dataset.messageId = message.id;
+        renderReadSheet(); $('read-sheet').showModal();
+      }; stack.append(receipt);
+    } else if (message === latestRead || (message === latest && !readers.length)) {
+      stack.append(element('small', 'read-receipt', readers.length ? 'Read' : 'Sent'));
+    }
+  }
+}
+socket.on('read_update', ({ roomId, username, messageId }) => {
+  if (!roomAllowed(roomId)) return;
+  const state = readStates.get(roomId) || {};
+  const messages = histories.get(roomId) || [];
+  const current = messages.findIndex(m => m.id === state[username]), next = messages.findIndex(m => m.id === messageId);
+  if (next < current) return;
+  Object.defineProperty(state, username, { value: messageId, enumerable: true, configurable: true, writable: true });
+  readStates.set(roomId, state);
+  if (activeRoom?.roomId === roomId) renderReceipts();
+  if ($('read-sheet').open) renderReadSheet();
+});
+$('lightbox-download').replaceChildren(icon('download'));
+$('lightbox-download').setAttribute('aria-label', 'Download photo');

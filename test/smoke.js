@@ -42,9 +42,10 @@ async function main() {
     async function client() {
       const socket = connect(url, { forceNew: true, reconnection: false, transports: ['websocket'] });
       clients.push(socket);
-      const log = { messages: [], typing: [], users: [], groups: [], profiles: {} };
+      const log = { messages: [], reads: [], typing: [], users: [], groups: [], profiles: {} };
       events.set(socket, log);
       socket.on('message_new', m => log.messages.push(m));
+      socket.on('read_update', update => log.reads.push(update));
       socket.on('typing_update', t => log.typing.push(t));
       socket.on('users_update', u => { log.users = u; });
       socket.on('groups_update', g => { log.groups = g; });
@@ -112,6 +113,12 @@ async function main() {
     assert.equal(events.get(carol).messages.length, 0, 'R7 third client cannot receive a DM');
     assert.equal(events.get(guest).messages.length, 0);
     assert.equal((await request(bob, 'room_open', { target: 'Alice' })).messages[0].text, 'Private hello');
+    const firstDMId = events.get(alice).messages[0].id;
+    await waitUntil(() => events.get(alice).reads.some(r => r.roomId === dm && r.username === 'Bob' && r.messageId === firstDMId), 'Opening DM reports read to participant');
+    await delay(50);
+    assert.equal(events.get(carol).reads.length, 0, 'DM read receipt stays private');
+    assert.equal(events.get(guest).reads.length, 0, 'Guest receives no receipts');
+    assert.equal((await request(carol, 'room_read', { roomId: dm, messageId: firstDMId })).ok, false);
     await request(alice, 'typing', { roomId: dm, typing: true });
     await waitUntil(() => events.get(bob).typing.some(t => t.roomId === dm && t.typing), 'DM typing');
     assert.equal(events.get(carol).typing.length, 0);
@@ -156,6 +163,13 @@ async function main() {
     const memberReadResume = await request(bob, 'resume', { token: bobRegistration.token });
     assert.equal(memberReadResume.unread[group] || 0, 0, 'room_read stays cleared after reconnect');
     assert.equal((await request(bob, 'room_open', { roomId: group })).messages.find(m => m.kind === 'chat').text, 'Members only');
+    const groupRead = await request(bob, 'room_open', { roomId: group });
+    const groupReadId = groupRead.messages.at(-1).id;
+    assert.equal(groupRead.readState.Bob, groupReadId);
+    await waitUntil(() => events.get(alice).reads.some(r => r.roomId === group && r.username === 'Bob' && r.messageId === groupReadId), 'Group receipt delivered to members');
+    assert.equal((await request(carol, 'room_read', { roomId: group, messageId: groupReadId })).ok, false);
+    await delay(50);
+    assert.equal(events.get(carol).reads.length, 0, 'Non-member receives no group read state');
     await request(alice, 'typing', { roomId: group, typing: true });
     await waitUntil(() => events.get(bob).typing.some(t => t.roomId === group && t.typing), 'Group typing');
     assert.equal(events.get(carol).typing.length, 0);
@@ -176,6 +190,16 @@ async function main() {
     assert.equal(events.get(carol).messages.length, 0, 'DM AI replies stay private');
 
 
+    const dmRead = await request(bob, 'room_open', { roomId: dm });
+    const persistedReadId = dmRead.messages.at(-1).id;
+    assert.equal(dmRead.readState.Bob, persistedReadId);
+    const beforeBackward = events.get(alice).reads.length;
+    assert.equal((await request(bob, 'room_read', { roomId: dm, messageId: firstDMId })).ok, true);
+    assert.equal((await request(alice, 'room_open', { roomId: dm, read: false })).readState.Bob, persistedReadId, 'Read pointer never moves backwards');
+    assert.equal(events.get(alice).reads.length, beforeBackward, 'No backwards read update');
+    assert.equal((await request(bob, 'room_read', { roomId: dm, messageId: groupReadId })).ok, false, 'Reject cross-room message id');
+    assert.equal((await request(bob, 'room_read', { roomId: dm, messageId: 'unknown' })).ok, false);
+
     // Binary attachments follow the exact same room permissions as text.
     const bytes = Buffer.from([0, 255, 16, 128, 65]);
     const groupFileResult = await request(bob, 'file_send', { roomId: group,
@@ -185,6 +209,9 @@ async function main() {
     assert.equal(groupFileResult.message.kind, 'file');
     assert.equal(/[\/?]/.test(groupFile.name), false, 'Sanitize download filename');
     assert.equal(groupFile.size, bytes.length);
+    for (const dimensions of [{ width: 0, height: 1 }, { width: 1.5, height: 2 }, { width: 1, height: 10001 }, { width: 1 }, { width: '1', height: 1 }]) {
+      assert.equal((await request(alice, 'file_send', { roomId: dm, name: 'bad.png', type: 'image/png', data: bytes, ...dimensions })).ok, false);
+    }
     await waitUntil(() => events.get(alice).messages.some(m => m.file?.id === groupFile.id), 'Member receives file metadata');
     const fetched = await request(alice, 'file_get', { roomId: group, fileId: groupFile.id });
     assert.equal(fetched.ok, true);
@@ -202,9 +229,12 @@ async function main() {
     const emptyUpload = await request(alice, 'file_send', { roomId: group, name: 'empty.txt', data: Buffer.alloc(0) });
     assert.equal(emptyUpload.ok, true, 'Empty files are valid files');
     assert.equal((await request(bob, 'file_get', { roomId: group, fileId: emptyUpload.message.file.id })).data.length, 0);
-    const dmFileResult = await request(alice, 'file_send', { roomId: dm, name: 'private.txt', type: 'text/plain', data: bytes });
+    const dmFileResult = await request(alice, 'file_send', { roomId: dm, name: 'private.png', type: 'image/png', data: bytes, width: 800, height: 600 });
     assert.equal(dmFileResult.ok, true);
     const dmFile = dmFileResult.message.file;
+    assert.equal(dmFile.width, 800); assert.equal(dmFile.height, 600);
+    const dmFetched = await request(bob, 'file_get', { roomId: dm, fileId: dmFile.id });
+    assert.equal(dmFetched.file.width, 800); assert.equal(dmFetched.file.height, 600);
     await waitUntil(() => events.get(bob).messages.some(m => m.file?.id === dmFile.id), 'DM participant receives file');
     assert.deepEqual(Buffer.from((await request(bob, 'file_get', { roomId: dm, fileId: dmFile.id })).data), bytes);
     assert.equal((await request(carol, 'file_get', { roomId: dm, fileId: dmFile.id })).ok, false);
@@ -243,6 +273,8 @@ async function main() {
     assert.equal(history.messages.at(-1).text, 'History 204');
     assert.equal((await request(bob, 'group_leave', { roomId: group })).ok, true);
     assert.equal((await request(bob, 'room_open', { roomId: group })).ok, false);
+    const remainingReadState = (await request(alice, 'room_open', { roomId: group, read: false })).readState;
+    assert.equal(Object.hasOwn(remainingReadState, 'Bob'), false, 'Read snapshot includes current members only');
     assert.equal((await request(bob, 'file_get', { roomId: group, fileId: groupFile.id })).ok, false);
     await waitUntil(() => events.get(alice).messages.some(m => m.kind === 'system' && m.text === 'Bob left the group'), 'Members see leave notice');
     const before = events.get(bob).messages.length;
@@ -265,6 +297,7 @@ async function main() {
     await waitUntil(() => events.get(alice).messages.some(m => m.text === 'Rejoined transport'), 'Resume restores Socket.IO group membership');
     assert.equal((await request(carol, 'room_open', { roomId: group })).ok, false);
 
+    const beforeRestartRead = (await request(alice, 'room_open', { roomId: dm, read: false })).readState.Bob;
     // An offline unread message must survive a full process-state reload too.
     alice.disconnect();
     await waitUntil(() => !events.get(bob).users.includes('Alice'), 'Offline before restart');
@@ -300,8 +333,12 @@ async function main() {
     const restoredAlice = await client(), restoredBob = await client(), restoredCarol = await client();
     const restored = await request(restoredAlice, 'resume', { token: aliceToken });
     assert.equal(restored.ok, true, 'Sessions survive restart');
+    const persistedState = await request(restoredAlice, 'room_open', { roomId: dm, read: false });
+    assert.equal(persistedState.readState.Bob, beforeRestartRead, 'Read state survives full server restart');
+    assert.equal(restored.unread[dm], 1, 'Fetching hidden room preserves unread');
     assert.deepEqual(restored.profiles.Alice, validProfile, 'Profile survives restart');
     assert.equal(restored.lastMessages[dm].text, 'Unread across restart');
+    assert.equal((await request(restoredAlice, 'file_get', { roomId: dm, fileId: dmFile.id })).file.width, 800, 'Photo dimensions survive restart');
     assert.deepEqual(Buffer.from((await request(restoredAlice, 'file_get', { roomId: group, fileId: groupFile.id })).data), bytes, 'File survives restart and history pruning');
     assert.equal(restored.lastMessages['dm:Bob|Carol'], undefined, 'Previews stay private');
     assert.equal(restored.unread[dm], 1, 'Offline unread count persists across restart');
@@ -333,7 +370,7 @@ async function main() {
       await assert.rejects(fs.access(path.join(directory, 'uploads', id)), { code: 'ENOENT' });
     }
     assert.deepEqual(Buffer.from((await request(restoredAlice, 'file_get', { roomId: dm, fileId: dmFile.id })).data), bytes, 'Deleting group preserves DM files');
-    console.log('PASS: file privacy, size and room validation, disk cleanup, profiles, membership notices; R3–R11 privacy, accounts, sessions, kicks, brute-force limit, offline DMs, persistent groups/history, AI fallback, and restart.');
+    console.log('PASS: private read receipts, monotonic pointers, hidden-room fetches, persisted read state and photo dimensions; file privacy, size and room validation, disk cleanup, profiles, membership notices; R3–R11 privacy, accounts, sessions, kicks, brute-force limit, offline DMs, persistent groups/history, AI fallback, and restart.');
   } finally {
     clients.forEach(socket => socket.disconnect());
     await new Promise(resolve => io.close(resolve));

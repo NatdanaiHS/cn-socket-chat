@@ -18,6 +18,7 @@ function createChatServer(options = {}) {
   const users = new Map(); // Socket id -> account username.
   const groups = new Map(); // Room id -> { name, creator, members: Set of usernames }.
   const histories = new Map(); // Room id -> at most 200 messages.
+  const readState = new Map(); // Room id -> member username -> last read message id.
   const directRooms = new Map(); // Room id -> two participant names.
 
   const accounts = new Map(); // Lowercase username -> password hash and unread counts.
@@ -53,13 +54,15 @@ function createChatServer(options = {}) {
     for (const [id, messages] of data.histories) histories.set(id, messages.slice(-200));
     for (const [id, names] of data.directRooms) directRooms.set(id, names);
     for (const [id, file] of data.files || []) files.set(id, file);
+    for (const [id, state] of data.readState || []) readState.set(id, new Map(state));
   }
   function flush() {
     clearTimeout(saveTimer);
     const data = {
       accounts: [...accounts.values()], sessions: [...sessions],
       groups: [...groups].map(([id, group]) => [id, { ...group, members: [...group.members] }]),
-      histories: [...histories], directRooms: [...directRooms], files: [...files]
+      histories: [...histories], directRooms: [...directRooms], files: [...files],
+      readState: [...readState].map(([id, state]) => [id, [...state]])
     };
     fs.mkdirSync(path.dirname(dataFile), { recursive: true });
     const temporary = dataFile + '.tmp';
@@ -180,6 +183,26 @@ function createChatServer(options = {}) {
         if (recipient && recipient[0] !== exceptId) io.to(recipient[0]).emit(event, payload);
       }
     }
+  }
+  function roomReadState(roomId) {
+    const members = groups.get(roomId)?.members || directRooms.get(roomId) || [];
+    return Object.fromEntries([...members].map(name => [name, readState.get(roomId)?.get(name) || null]));
+  }
+  function markRead(roomId, username, messageId) {
+    const messages = histories.get(roomId) || [];
+    // Older clients may omit the id; opening a room reads its current history.
+    messageId ??= messages.at(-1)?.id;
+    if (!messageId) return;
+    const index = messages.findIndex(message => message.id === messageId);
+    if (index < 0) throw new Error('That message is not in this room history.');
+    const state = readState.get(roomId) || new Map();
+    const previous = state.get(username);
+    // A previous pointer pruned from the bounded history precedes every retained message.
+    if (previous === messageId || (previous && messages.findIndex(m => m.id === previous) >= index)) return;
+    state.set(username, messageId); readState.set(roomId, state);
+    delete (accountFor(username).unread || {})[roomId];
+    scheduleSave();
+    deliver(roomId, 'read_update', { roomId, username, messageId });
   }
   async function askGemini(prompt) {
     if (!apiKey) throw new Error('AI is unavailable: no Gemini API key is configured.');
@@ -308,7 +331,7 @@ function createChatServer(options = {}) {
       broadcastProfiles();
       return { profile };
     });
-    handle('file_send', ({ roomId, name, type, data }) => {
+    handle('file_send', ({ roomId, name, type, data, width, height }) => {
       requireRoom(roomId);
       if (!Buffer.isBuffer(data) && !(data instanceof ArrayBuffer)) throw new Error('Choose a file to send.');
       const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data);
@@ -318,7 +341,12 @@ function createChatServer(options = {}) {
       name = name.replace(/[\\/<>:"|?*\p{Cc}]/gu, '_').replace(/^\.+|[. ]+$/g, '').trim().slice(0, 180) || 'file';
       type = typeof type === 'string' && /^[\w.+-]+\/[\w.+-]+$/.test(type) && type.length <= 100
         ? type.toLowerCase() : 'application/octet-stream';
-      const file = { id: randomUUID(), name, type, size: bytes.length };
+      if ((width !== undefined || height !== undefined) &&
+          ![width, height].every(value => Number.isInteger(value) && value > 0 && value <= 10000)) {
+        throw new Error('Image dimensions must be positive integers up to 10000.');
+      }
+      const file = { id: randomUUID(), name, type, size: bytes.length,
+        ...(width !== undefined ? { width, height } : {}) };
       fs.mkdirSync(uploadDirectory, { recursive: true });
       fs.writeFileSync(path.join(uploadDirectory, file.id), bytes, { flag: 'wx', mode: 0o600 });
       files.set(file.id, { roomId, ...file });
@@ -332,18 +360,19 @@ function createChatServer(options = {}) {
       const file = files.get(fileId);
       if (!file || file.roomId !== roomId) throw new Error('That file does not belong to this room.');
       try {
-        return { file: { id: file.id, name: file.name, type: file.type, size: file.size },
+        return { file: { id: file.id, name: file.name, type: file.type, size: file.size, ...(file.width ? { width: file.width, height: file.height } : {}) },
           data: fs.readFileSync(path.join(uploadDirectory, file.id)) };
       } catch { throw new Error('That file is no longer available.'); }
     });
 
-    handle('room_read', ({ roomId }) => {
+    handle('room_read', ({ roomId, messageId }) => {
       requireRoom(roomId);
+      markRead(roomId, users.get(socket.id), messageId);
       delete (accountFor(users.get(socket.id)).unread || {})[roomId];
       scheduleSave();
       return {};
     });
-    handle('room_open', ({ target, roomId }) => {
+    handle('room_open', ({ target, roomId, read = true }) => {
       if (target !== undefined) {
         const account = typeof target === 'string' && accountFor(target);
         if (!account) throw new Error('That account does not exist.');
@@ -358,9 +387,12 @@ function createChatServer(options = {}) {
         }
       }
       requireRoom(roomId);
-      delete (accountFor(users.get(socket.id)).unread || {})[roomId];
-      scheduleSave();
-      return { roomId, messages: histories.get(roomId) || [] };
+      if (read !== false) {
+        markRead(roomId, users.get(socket.id));
+        delete (accountFor(users.get(socket.id)).unread || {})[roomId];
+        scheduleSave();
+      }
+      return { roomId, messages: histories.get(roomId) || [], readState: roomReadState(roomId) };
     });
     handle('group_create', async ({ name }) => {
       if (typeof name !== 'string' || !name.trim()) throw new Error('Please enter a group name.');
@@ -396,6 +428,7 @@ function createChatServer(options = {}) {
       if (!group) throw new Error('This is not a group.');
       deliver(roomId, 'typing_update', { roomId, name: users.get(socket.id), typing: false }, socket.id);
       group.members.delete(users.get(socket.id));
+      readState.get(roomId)?.delete(users.get(socket.id));
       delete (accountFor(users.get(socket.id)).unread || {})[roomId];
       scheduleSave();
       await socket.leave(roomId);
@@ -406,7 +439,7 @@ function createChatServer(options = {}) {
           fs.rmSync(path.join(uploadDirectory, id), { force: true });
           files.delete(id);
         }
-        groups.delete(roomId); histories.delete(roomId);
+        groups.delete(roomId); histories.delete(roomId); readState.delete(roomId);
       } else {
         deliver(roomId, 'message_new', saveMessage(roomId, users.get(socket.id), users.get(socket.id) + ' left the group', 'system'));
       }

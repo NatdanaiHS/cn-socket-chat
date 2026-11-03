@@ -18,14 +18,15 @@ Every request except register, login and resume requires an authenticated socket
 | kicked | S → C | { message: "Logged in from another place" }, followed by transport disconnect. New login/resume wins over the old socket. Browser clears its credential and returns to login; explicit login can reconnect. |
 | users_update | S → C | string[] of currently connected account usernames, including the recipient. Sent after login/resume/logout/disconnect. |
 | groups_update | S → C | Group[] of every existing group and all persistent members, with onlineMembers for presence. Sent after login/resume/create/join/leave/logout/disconnect. Metadata is visible to authenticated users; contents are restricted. |
-| room_open | C → S | { target: username } for a DM, or { roomId } for existing permitted history. Ack { ok, roomId, messages: Message[] }. New DMs require an online target; existing DMs may be opened while the target is offline. Only participants or group members can get history. Clears requester's persisted unread count. |
-| room_read | C → S | { roomId }; ack { ok } if supplied. Checks access, then clears persisted unread count. Browser sends this when a message arrives in its active room. |
+| room_open | C → S | { target: username, read?: boolean } for a DM, or { roomId, read?: boolean } for existing permitted history. Ack { ok, roomId, messages: Message[], readState: { [memberUsername]: messageId or null } }. New DMs require an online target; existing DMs may be opened while the target is offline. Only participants or group members can get history. By default advances the requester's read pointer to the latest message and clears unread. Hidden browser pages send read:false to fetch history without marking it read. |
+| room_read | C → S | { roomId, messageId }; ack { ok } if supplied. Checks room access and retained message identity. Advances the read pointer in room-history order, never backwards, and clears unread. Legacy requests without messageId read the latest message. Browser sends only while visible, on open, incoming active-room messages, return to visibility, and scroll to bottom. |
+| read_update | S → C | { roomId, username, messageId }. Sent only when a pointer advances, through the same private delivery path as messages: DM participants or current group members. |
 | group_create | C → S | { name }; ack { ok, roomId }. Trimmed, unique case-insensitively, 1–60 Unicode characters, no control characters. Saves creator username; joins only creator. Other fields cannot add members. |
 | group_join | C → S | { roomId }; ack { ok, roomId }. Adds requesting username and subscribes its socket. A new membership saves and delivers a kind=system join notice to members including the joiner; repeat join is idempotent. No target/member field is accepted. |
 | group_leave | C → S | { roomId }; ack { ok, roomId }. Removes requesting username and socket subscription; clears unread count. Only the final member leaving deletes a group, its history and all its files from disk and registry. A leave notice is delivered after removal to remaining members. |
 | message_send | C → S | { roomId, text }; ack { ok }. Trimmed text, 1–4000 UTF-16 code units. Validates access; offline DM recipients are allowed. Group messages starting with "@ai " also request an AI answer. |
 | message_new | S → C | Message. DMs go only to connected participant sockets; group messages only to subscribed members. Saved before delivery, including when recipients are offline. AI group replies use sender "AI Bot" and kind "ai". File and system messages use the same private delivery path. |
-| file_send | C → S | { roomId, name, type, data: ArrayBuffer }; ack { ok, message: Message }. Authenticated room members/DM participants only. Binary bytes up to 5 × 1024 × 1024, including empty files; invalid binary, name or access is rejected. Names lose path separators, control/reserved characters and trailing dots/spaces, capped at 180 characters. MIME defaults to application/octet-stream. Saves UUID-named bytes privately, then delivers kind=file using message_new. |
+| file_send | C → S | { roomId, name, type, data: ArrayBuffer, width?: integer, height?: integer }; ack { ok, message: Message }. Authenticated room members/DM participants only. Binary bytes up to 5 × 1024 × 1024, including empty files; invalid binary, name or access is rejected. Names lose path separators, control/reserved characters and trailing dots/spaces, capped at 180 characters. MIME defaults to application/octet-stream. Optional dimensions must be supplied together as positive integers up to 10000. Saves dimensions with metadata and UUID-named bytes privately, then delivers kind=file using message_new. |
 | file_get | C → S | { roomId, fileId }; ack { ok, file: File, data: binary }. Checks room access and the file registry owning room. Unknown, cross-room and missing files are rejected. No public upload URL exists. |
 | profile_update | C → S | { avatar: null or JPEG data URL, bio: string, color: preset }; ack { ok, profile }. Bio at most 80 Unicode characters (trimmed). Avatar must start with data:image/jpeg;base64, contain canonical base64 with JPEG start/end markers, and the complete data URL must be at most 60 × 1024 UTF-8 bytes. Other MIME types are rejected. Username is never changed. |
 | profiles_update | S → C | { [username]: { avatar, bio, color } }. Public profiles of all registered accounts; sent only to logged-in sockets after authentication and profile edits. Never contains passwords, tokens or unread counts. |
@@ -45,7 +46,7 @@ onlineMembers: string[] }. Members includes offline users; onlineMembers is a su
 
 Message = { id: UUID string, roomId: string, sender: string, text: string,
 time: ISO-8601 string, kind: "chat" | "ai" | "file" | "system", file?: File }.
-File = { id: UUID string, name: string, type: MIME string, size: bytes }.
+File = { id: UUID string, name: string, type: MIME string, size: bytes, width?: integer, height?: integer }.
 File messages use empty text and metadata only; system notices use text and a human sender.
 Profile = { avatar: null | JPEG data URL, bio: string, color: preset }.
 Presets: #4f46e5, #2563eb, #0f766e, #a21caf, #be123c, #b45309.
@@ -70,7 +71,7 @@ tab normally resumes the same account and kicks the previous tab.
 
 DATA_FILE (default ./data/chat-data.json, relative to the working directory)
 contains accounts, hashed sessions, groups, DM participant metadata, per-room
-history (last 200 messages), profiles, per-account unread counts and a file registry.
+history (last 200 messages), profiles, per-account unread counts, readState entries [roomId, [[username, messageId], ...]], and a file registry. Legacy JSON without readState starts with empty pointers. Leaving removes that member's pointer; deleting a group removes its state.
 Startup loads existing data and ignores expired sessions. Attachment bytes are stored
 separately as described below; uploads have no public HTTP route. Mutations schedule a save after 500ms of inactivity.
 Writes use a temporary file in the same directory and atomic rename. Server close,
@@ -105,3 +106,5 @@ Theme choice (light/dark/system) stays in localStorage under campus-chat-theme;
 campus-chat-accent caches the own accent for first paint. Neither preference sends
 chat data over HTTP. System mode follows prefers-color-scheme live. Typing, local
 AI summaries and Blob URLs are transient.
+
+Photo uploads include oriented width/height. JPEG, PNG and WebP over 400 KB or 2048 px are oriented using createImageBitmap with from-image, scaled to at most 2048 px, and encoded as JPEG quality 0.85. Transparent PNG stays PNG only when the encoded result is at most 1.5 MB. GIF bytes are unchanged. The final upload still obeys the 5 MB limit. Image previews reserve metadata dimensions and use private file_get bytes; lightbox and downloads use Blob URLs.

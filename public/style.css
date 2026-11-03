@@ -212,3 +212,24 @@ legend { margin-bottom: 12px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* Photo dimensions are reserved before private attachment bytes arrive. */
+.message.photo-message, .own .message.photo-message { padding: 0; background: transparent; overflow: hidden; border-radius: 18px 18px 18px 4px; }
+.own .message.photo-message { border-radius: 18px 18px 4px 18px; }
+.photo-message .image-button { min-width: 0; min-height: 0; max-width: 100%; border-radius: inherit; position: relative; color: var(--text-muted); }
+.image-preview { width: 100%; height: 100%; max-height: none; }
+.image-button.loading { background: var(--surface-2); }
+.image-button.loading::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--border), transparent); animation: photo-loading 1400ms infinite; }
+.image-button.loading img { visibility: hidden; }
+.image-status { display: grid; place-items: center; width: 100%; height: 100%; background: var(--surface-2); padding: 8px; font-size: 12px; }
+@keyframes photo-loading { from { opacity: .3; } 50% { opacity: .8; } to { opacity: .3; } }
+.read-receipt { display: block; margin-top: 4px; margin-left: auto; text-align: right; font-size: 12px; font-weight: 400; color: var(--text-muted); }
+button.read-receipt { min-height: 44px; padding: 0; background: transparent; }
+.file-card { max-width: 320px; }
+.file-info strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.row-preview .icon, .banner-copy .icon { width: 16px; height: 16px; margin-right: 4px; }
+#lightbox::backdrop { background: #0B1120e6; }
+@media (max-width: 768px) {
+  .photo-message .image-button { max-width: 70vw; }
+  .message-row:has(.photo-message) .bubble-stack { max-width: min(70vw, calc(100% - 96px)); }
+}
