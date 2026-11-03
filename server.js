@@ -13,7 +13,8 @@ function createChatServer(options = {}) {
   const app = express();
   const server = http.createServer(app);
   const io = new Server(server, { maxHttpBufferSize: 6 * 1024 * 1024 });
-  app.use(express.static(path.join(__dirname, 'public')));
+  // no-cache: browsers/Cloudflare must revalidate, so a deploy never mixes old JS with new HTML.
+  app.use(express.static(path.join(__dirname, 'public'), { setHeaders: res => res.setHeader('Cache-Control', 'no-cache') }));
   const users = new Map(); // Socket id -> account username.
   const groups = new Map(); // Room id -> { name, creator, members: Set of usernames }.
   const histories = new Map(); // Room id -> at most 200 messages.
