@@ -99,9 +99,23 @@ function createChatServer(options = {}) {
       directRooms: [...directRooms].filter(([, names]) => names.includes(name))
         .map(([roomId, names]) => ({ roomId, target: names.find(n => n !== name) })),
       unread: accountFor(name).unread || {}, profiles: publicProfiles(),
-      lastMessages: Object.fromEntries([...histories]
-        .filter(([id]) => groups.get(id)?.members.has(name) || directRooms.get(id)?.includes(name))
-        .map(([id, messages]) => [id, messages.at(-1)])) };
+      lastMessages: Object.fromEntries([...histories.keys()]
+        .filter(id => groups.get(id)?.members.has(name) || directRooms.get(id)?.includes(name))
+        .map(id => [id, visibleHistory(id, name).at(-1)]).filter(([, message]) => message)) };
+  }
+  // "Clear chat for me" stores a per-account timestamp; older messages stay for everyone else.
+  function visibleHistory(roomId, username) {
+    const clearedAt = accountFor(username)?.clearedAt?.[roomId];
+    const messages = histories.get(roomId) || [];
+    return clearedAt ? messages.filter(message => message.time > clearedAt) : messages;
+  }
+  // Removes every attachment of a room from disk, including ones older than the 200-message history.
+  function deleteRoomFiles(roomId) {
+    for (const [id, file] of files) {
+      if (file.roomId !== roomId) continue;
+      fs.rmSync(path.join(uploadDirectory, id), { force: true });
+      files.delete(id);
+    }
   }
   async function authenticate(socket, name, token, hash) {
     // Remove the old transport before joining rooms, so there is one live account.
@@ -392,7 +406,7 @@ function createChatServer(options = {}) {
         delete (accountFor(users.get(socket.id)).unread || {})[roomId];
         scheduleSave();
       }
-      return { roomId, messages: histories.get(roomId) || [], readState: roomReadState(roomId) };
+      return { roomId, messages: visibleHistory(roomId, users.get(socket.id)), readState: roomReadState(roomId) };
     });
     handle('group_create', async ({ name }) => {
       if (typeof name !== 'string' || !name.trim()) throw new Error('Please enter a group name.');
@@ -433,18 +447,52 @@ function createChatServer(options = {}) {
       scheduleSave();
       await socket.leave(roomId);
       if (!group.members.size) {
-        // The registry also includes attachments older than the 200-message history.
-        for (const [id, file] of files) {
-          if (file.roomId !== roomId) continue;
-          fs.rmSync(path.join(uploadDirectory, id), { force: true });
-          files.delete(id);
-        }
+        deleteRoomFiles(roomId);
         groups.delete(roomId); histories.delete(roomId); readState.delete(roomId);
       } else {
         deliver(roomId, 'message_new', saveMessage(roomId, users.get(socket.id), users.get(socket.id) + ' left the group', 'system'));
       }
       broadcastLists();
       return { roomId };
+    });
+    // Only the creator may delete a group; members are told before the Socket.IO room is emptied.
+    handle('group_delete', ({ roomId }) => {
+      requireRoom(roomId);
+      const group = groups.get(roomId);
+      if (!group) throw new Error('This is not a group.');
+      const me = users.get(socket.id);
+      if (group.creator !== me) throw new Error('Only the group creator can delete this group.');
+      io.to(roomId).emit('group_deleted', { roomId, name: group.name, by: me });
+      io.in(roomId).socketsLeave(roomId);
+      for (const name of group.members) delete (accountFor(name)?.unread || {})[roomId];
+      deleteRoomFiles(roomId);
+      groups.delete(roomId); histories.delete(roomId); readState.delete(roomId);
+      scheduleSave();
+      broadcastLists();
+      return { roomId };
+    });
+    // scope 'me': hide history for this account only. scope 'everyone': group creator wipes the room for all.
+    handle('room_clear', ({ roomId, scope }) => {
+      requireRoom(roomId);
+      const me = users.get(socket.id);
+      if (scope === 'me') {
+        const account = accountFor(me);
+        account.clearedAt = { ...account.clearedAt, [roomId]: new Date().toISOString() };
+        delete (account.unread || {})[roomId];
+        scheduleSave();
+        return { roomId, scope };
+      }
+      if (scope !== 'everyone') throw new Error('Choose who to clear the chat for.');
+      const group = groups.get(roomId);
+      // A DM has no owner: one person must not erase the other person's copy.
+      if (!group) throw new Error('Direct messages can only be cleared for yourself.');
+      if (group.creator !== me) throw new Error('Only the group creator can clear the chat for everyone.');
+      deleteRoomFiles(roomId);
+      histories.delete(roomId); readState.delete(roomId);
+      for (const name of group.members) delete (accountFor(name)?.unread || {})[roomId];
+      io.to(roomId).emit('room_cleared', { roomId, by: me });
+      deliver(roomId, 'message_new', saveMessage(roomId, me, me + ' cleared the chat', 'system'));
+      return { roomId, scope };
     });
     handle('message_send', ({ roomId, text }) => {
       requireRoom(roomId);
@@ -480,7 +528,7 @@ function createChatServer(options = {}) {
     });
     handle('ai_summarize', async ({ roomId }) => {
       requireRoom(roomId);
-      const transcript = (histories.get(roomId) || []).slice(-50)
+      const transcript = visibleHistory(roomId, users.get(socket.id)).slice(-50)
         .map(m => m.sender + ': ' + (m.kind === 'file' ? '[File: ' + m.file.name + ']' : m.text)).join('\n');
       if (!transcript) throw new Error('There are no messages to summarize yet.');
       const originalGroup = groups.get(roomId);

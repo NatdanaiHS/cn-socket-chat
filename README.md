@@ -1,3 +1,5 @@
+<img src="public/logo.svg" width="48" alt=""> 
+
 # WongChat — Simple Chat Application
 
 A university Computer Network term project built with Node.js 20+, CommonJS,

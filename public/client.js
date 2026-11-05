@@ -5,8 +5,17 @@ const $ = id => document.getElementById(id);
 // All UI icons share one SVG source; user content is always written with textContent.
 function icon(name) {
   const paths = {
-    compass: ['M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Z','m16 8-3 5-5 3 3-5Z'],
-    chevron: ['m6 9 6 6 6-6'], settings: ['M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z','m9 3 1-2h4l1 2 3 2 3 1v4l-2 2v3l-2 3-3 1-2 2h-4l-1-2-3-2-2-3v-4l2-2V6Z'], arrow: ['M4 12h16m-6-6 6 6-6 6'],
+    // Paths follow the Lucide icon set (ISC licence), 24×24 grid, stroke 2.
+    compass: ['M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z','m16.24 7.76-2.12 6.36-6.36 2.12 2.12-6.36 6.36-2.12z'],
+    chevron: ['m6 9 6 6 6-6'], arrow: ['M5 12h14','m12 5 7 7-7 7'],
+    settings: ['M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z','M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z'],
+    user: ['M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2','M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z'],
+    lock: ['M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z','M7 11V7a5 5 0 0 1 10 0v4'],
+    zap: ['M13 2 3 14h9l-1 8 10-12h-9l1-8z'],
+    trash: ['M3 6h18','M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6','M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2','M10 11v6','M14 11v6'],
+    eraser: ['m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21','M22 21H7','m5 11 9 9'],
+    logout: ['M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4','m16 17 5-5-5-5','M21 12H9'],
+    more: ['M13 12a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z','M13 5a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z','M13 19a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z'],
     chat: ['M21 11.5a8.5 8.5 0 0 1-8.5 8.5H3l2-5a8.5 8.5 0 1 1 16-3.5Z','M8 10h8M8 14h5'],
     plus: ['M12 5v14M5 12h14'], close: ['m6 6 12 12M6 18 18 6'],
     back: ['m15 18-6-6 6-6'], send: ['M12 19V5m-6 6 6-6 6 6'],
@@ -16,9 +25,9 @@ function icon(name) {
     users: ['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M22 21v-2a4 4 0 0 0-3-3.9','M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM17 3a4 4 0 0 1 0 8'],
     image: ['M3 3h18v18H3Z','m3 17 6-6 4 4 3-3 5 5M8 7h.01'],
     file: ['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M8 13h8M8 17h5'],
-    download: ['M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5'],
-    sun: ['M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8ZM12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1'],
-    moon: ['M21 13A9 9 0 0 1 11 3a9 9 0 1 0 10 10Z'],
+    download: ['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4','m7 10 5 5 5-5','M12 15V3'],
+    sun: ['M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z','M12 2v2','M12 20v2','m4.93 4.93 1.41 1.41','m17.66 17.66 1.41 1.41','M2 12h2','M20 12h2','m6.34 17.66-1.41 1.41','m19.07 4.93-1.41 1.41'],
+    moon: ['M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z'],
     monitor: ['M3 3h18v14H3ZM8 21h8M12 17v4'],
     eye: ['M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z','M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z'],
     check: ['m5 12 4 4L19 6'], alert: ['m12 3 10 18H2ZM12 9v4m0 4h.01']
@@ -28,6 +37,23 @@ function icon(name) {
   for (const d of paths[name] || paths.chat) { const path = document.createElementNS(svg.namespaceURI, 'path'); path.setAttribute('d', d); svg.append(path); }
   return svg;
 }
+// Same shapes as public/logo.svg: a speech bubble holding a ring of three friends ("วง" = a circle of people).
+let logoCount = 0;
+function logoMark(size) {
+  const ns = 'http://www.w3.org/2000/svg', svg = document.createElementNS(ns, 'svg'), id = 'wong-g' + (++logoCount);
+  const make = (tag, attributes) => { const node = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attributes)) node.setAttribute(k, v); return node; };
+  for (const [k, v] of Object.entries({ viewBox: '0 0 64 64', width: size, height: size, 'aria-hidden': 'true', class: 'logo-mark' })) svg.setAttribute(k, v);
+  const gradient = make('linearGradient', { id, x1: 8, y1: 4, x2: 58, y2: 60, gradientUnits: 'userSpaceOnUse' });
+  gradient.append(make('stop', { offset: 0, 'stop-color': '#5865F2' }), make('stop', { offset: 1, 'stop-color': '#8B5CF6' }));
+  const defs = make('defs', {}); defs.append(gradient);
+  svg.append(defs,
+    make('path', { fill: 'url(#' + id + ')', d: 'M22 5h20a17 17 0 0 1 17 17v10a17 17 0 0 1-17 17H27l-11.6 9.3c-1.6 1.3-3.9-.1-3.5-2.1L13.6 47A17 17 0 0 1 5 32V22A17 17 0 0 1 22 5Z' }),
+    make('circle', { cx: 32, cy: 27, r: 10.5, fill: 'none', stroke: '#fff', 'stroke-opacity': '.38', 'stroke-width': 3 }),
+    make('circle', { cx: 32, cy: 16.5, r: 4.6, fill: '#fff' }), make('circle', { cx: 41.1, cy: 32.25, r: 4.6, fill: '#fff' }),
+    make('circle', { cx: 22.9, cy: 32.25, r: 4.6, fill: '#fff' }));
+  return svg;
+}
+document.querySelectorAll('[data-logo]').forEach(node => node.replaceChildren(logoMark(node.dataset.logo)));
 document.querySelectorAll('[data-icon]').forEach(node => node.replaceChildren(icon(node.dataset.icon)));
 for (const [id, name] of Object.entries({ 'back-button': 'back', 'attach-button': 'plus', 'emoji-button': 'smile', 'ai-button': 'sparkles', 'password-toggle': 'eye' })) $(id).replaceChildren(icon(name));
 document.querySelectorAll('[data-close]').forEach(node => node.replaceChildren(icon('close')));
@@ -163,15 +189,92 @@ $('theme-toggle').onclick = () => {
 };
 $('members-toggle').onclick = () => setContext(!contextVisible);
 $('close-context').onclick = $('drawer-backdrop').onclick = () => setContext(false);
-$('group-menu-button').onclick = () => { $('group-menu').hidden = !$('group-menu').hidden; $('group-menu-button').setAttribute('aria-expanded', String(!$('group-menu').hidden)); };
-$('group-members-action').onclick = () => { $('group-menu').hidden = true; if (activeRoom?.roomId === selectedGroupId) setContext(true); else { renderMembers(); $('member-list').showModal(); } };
-$('group-leave-action').onclick = () => { $('group-menu').hidden = true; void leaveSelectedGroup(); };
+// One menu builder for the sidebar group menu and the chat header "⋮" menu; the server re-checks every permission.
+function menuItems(roomId) {
+  const group = groups.find(g => g.roomId === roomId && g.members.includes(myName));
+  if (!group) {
+    const room = directRooms.find(r => r.roomId === roomId); if (!room) return [];
+    return [
+      { label: 'View profile', icon: 'user', run: () => showProfile(room.target) },
+      { label: 'Clear chat for me', icon: 'eraser', run: () => clearChat(roomId, room.target, 'me') }
+    ];
+  }
+  const items = [
+    { label: 'Members', icon: 'users', run: () => { if (activeRoom?.roomId === roomId) setContext(true); else { selectedGroupId = roomId; renderMembers(); $('member-list').showModal(); } } },
+    { label: 'Clear chat for me', icon: 'eraser', run: () => clearChat(roomId, group.name, 'me') }
+  ];
+  if (group.creator === myName) {
+    items.push({ separator: true },
+      { label: 'Clear chat for everyone', icon: 'eraser', danger: true, run: () => clearChat(roomId, group.name, 'everyone') },
+      { label: 'Delete group', icon: 'trash', danger: true, run: () => deleteGroup(group) });
+  }
+  items.push({ separator: true }, { label: 'Leave group', icon: 'logout', danger: true, run: () => { selectedGroupId = roomId; void leaveSelectedGroup(); } });
+  return items;
+}
+function closeMenus() {
+  for (const [menu, button] of [['group-menu', 'group-menu-button'], ['room-menu', 'room-menu-button']]) { $(menu).hidden = true; $(button).setAttribute('aria-expanded', 'false'); }
+}
+function toggleMenu(menuId, buttonId, roomId) {
+  const menu = $(menuId), opening = menu.hidden; closeMenus(); if (!opening || !roomId) return;
+  menu.replaceChildren();
+  for (const item of menuItems(roomId)) {
+    if (item.separator) { menu.append(element('div', 'menu-separator')); continue; }
+    const button = element('button', 'menu-item' + (item.danger ? ' danger' : '')); button.type = 'button'; button.setAttribute('role', 'menuitem');
+    button.append(icon(item.icon), element('span', '', item.label));
+    button.onclick = () => { closeMenus(); item.run(); }; menu.append(button);
+  }
+  menu.hidden = false; $(buttonId).setAttribute('aria-expanded', 'true'); menu.querySelector('button')?.focus();
+}
+$('group-menu-button').onclick = event => { event.stopPropagation(); toggleMenu('group-menu', 'group-menu-button', selectedGroupId); };
+$('room-menu-button').onclick = event => { event.stopPropagation(); toggleMenu('room-menu', 'room-menu-button', activeRoom?.roomId); };
+document.addEventListener('click', event => { if (!event.target.closest('.dropdown-menu')) closeMenus(); });
+// Resolves true only when the user confirms; destructive actions can require typing a name.
+function confirmAction({ title, body, confirmLabel, requireText }) {
+  return new Promise(resolve => {
+    const dialog = $('confirm-dialog'); let done = false;
+    const finish = value => { if (done) return; done = true; dialog.close(); resolve(value); };
+    $('confirm-title').textContent = title; $('confirm-body').textContent = body; $('confirm-ok').textContent = confirmLabel;
+    $('confirm-type-field').hidden = !requireText; $('confirm-type-input').value = '';
+    $('confirm-type-label').textContent = requireText ? 'Type "' + requireText + '" to confirm' : '';
+    $('confirm-ok').disabled = !!requireText;
+    $('confirm-type-input').oninput = () => { $('confirm-ok').disabled = $('confirm-type-input').value.trim() !== requireText; };
+    $('confirm-form').onsubmit = event => { event.preventDefault(); if (!$('confirm-ok').disabled) finish(true); };
+    $('confirm-cancel').onclick = () => finish(false);
+    dialog.onclose = () => finish(false);
+    dialog.showModal(); (requireText ? $('confirm-type-input') : $('confirm-cancel')).focus();
+  });
+}
+// Forget everything cached for a room so cleared messages and their files disappear immediately.
+function wipeLocalRoom(roomId) {
+  histories.set(roomId, []); summaries.delete(roomId); lastMessages.delete(roomId); unread.delete(roomId);
+  readStates.set(roomId, {}); forgetFiles(roomId);
+  if (activeRoom?.roomId === roomId) { firstUnreadId = null; renderMessages(true); }
+  renderLists();
+}
+async function clearChat(roomId, title, scope) {
+  const everyone = scope === 'everyone';
+  const confirmed = await confirmAction({
+    title: everyone ? 'Clear chat for everyone?' : 'Clear chat for you?',
+    body: everyone ? 'All messages and files in ' + title + ' will be deleted for every member. This cannot be undone.'
+      : 'Messages in ' + title + ' will disappear for you only. Everyone else still sees them.',
+    confirmLabel: everyone ? 'Clear for everyone' : 'Clear for me'
+  });
+  if (!confirmed) return;
+  try { await request('room_clear', { roomId, scope }); if (!everyone) wipeLocalRoom(roomId); toast(everyone ? 'Chat cleared for everyone' : 'Chat cleared for you'); }
+  catch (error) { showError(error); }
+}
+async function deleteGroup(group) {
+  const confirmed = await confirmAction({ title: 'Delete ' + group.name + '?', body: 'The group, its messages and every shared file will be removed for all members. This cannot be undone.', confirmLabel: 'Delete group', requireText: group.name });
+  if (!confirmed) return;
+  try { await request('group_delete', { roomId: group.roomId }); toast('Deleted ' + group.name); }
+  catch (error) { showError(error); }
+}
 $('general-channel').onclick = () => { const g = groups.find(g => g.roomId === selectedGroupId); if (g) void openRoom({ roomId: g.roomId }, g.name, 'group'); };
 $('side-summarize').onclick = () => { if (!$('summarize').disabled) $('summarize').click(); };
 const wideLayout = matchMedia('(min-width: 1024px)');
 wideLayout.addEventListener('change', () => setContext(wideLayout.matches));
 window.addEventListener('resize', renderContext);
-document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('group-menu').hidden = true; if (!wideLayout.matches) setContext(false); } });
+document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeMenus(); if (!wideLayout.matches) setContext(false); } });
 
 const tokenStorageKey = 'campus-chat-token';
 const histories = new Map(), summaries = new Map(), unread = new Map(), typers = new Map();
@@ -281,13 +384,14 @@ function updateTitle() {
   document.title = (total ? '(' + total + ') ' : '') + 'WongChat';
   const other = total - (unread.get(activeRoom?.roomId) || 0);
   backUnread.hidden = !other; backUnread.textContent = other > 99 ? '99+' : String(other);
-  const canvas = document.createElement('canvas'); canvas.width = canvas.height = 32;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#2563EB'; ctx.beginPath(); ctx.roundRect(0, 0, 32, 32, 8); ctx.fill();
-  ctx.fillStyle = '#FFFFFF'; ctx.font = '600 22px system-ui'; ctx.fillText('W', 5, 24);
-  if (total) { ctx.beginPath(); ctx.arc(26, 6, 6, 0, Math.PI * 2); ctx.fillStyle = '#EF4444'; ctx.fill(); }
+  // The favicon is the logo; unread adds a red dot drawn on a canvas copy.
+  if (!total || !faviconImage.complete) { document.querySelector('link[rel="icon"]').href = '/logo.svg'; return; }
+  const canvas = document.createElement('canvas'); canvas.width = canvas.height = 64;
+  const ctx = canvas.getContext('2d'); ctx.drawImage(faviconImage, 0, 0, 64, 64);
+  ctx.beginPath(); ctx.arc(52, 12, 11, 0, Math.PI * 2); ctx.fillStyle = '#F23F43'; ctx.fill();
   document.querySelector('link[rel="icon"]').href = canvas.toDataURL();
 }
+const faviconImage = new Image(); faviconImage.onload = () => updateTitle(); faviconImage.src = '/logo.svg';
 function relativeTime(time) {
   const minutes = Math.max(0, Math.floor((Date.now() - new Date(time)) / 60000));
   if (minutes < 1) return 'now';
@@ -377,7 +481,7 @@ function renderLists() {
 }
 $('sidebar-search').oninput = $('dm-search').oninput = $('discover-search').oninput = renderLists;
 function setComposer(enabled) {
-  for (const id of ['message-input', 'send-button', 'summarize', 'attach-button', 'emoji-button', 'ai-button']) $(id).disabled = !enabled;
+  for (const id of ['message-input', 'send-button', 'summarize', 'attach-button', 'emoji-button', 'ai-button', 'room-menu-button']) $(id).disabled = !enabled;
 }
 function clearRoom() {
   stopTyping(); openingVersion++; activeRoom = null; firstUnreadId = null;
@@ -516,10 +620,10 @@ function fileContent(message) {
   if (isImage(file)) {
     const button = element('button', 'image-button loading'); button.type = 'button';
     button.setAttribute('aria-label', 'Open image ' + file.name);
-    const width = file.width || 240, height = file.height || 180;
-    const scale = Math.min(1, 400 / width, 300 / height);
-    const displayWidth = width * scale, displayHeight = height * scale;
-    button.style.width = displayWidth + 'px'; button.style.aspectRatio = displayWidth + ' / ' + displayHeight;
+    // CSS sizes the box from the real dimensions (see .image-button), so it fits every screen without JS on resize.
+    const sizeTo = (w, h) => { button.style.setProperty('--w', w); button.style.setProperty('--h', h); button.style.setProperty('--ratio', w / h); };
+    const width = file.width || 0, height = file.height || 0;
+    sizeTo(width || 320, height || 240);
     button.setAttribute('aria-busy', 'true');
     const unavailable = () => {
       button.classList.remove('loading'); button.removeAttribute('aria-busy');
@@ -529,10 +633,13 @@ function fileContent(message) {
     fileURL(roomId, file).then(url => {
       if (!button.isConnected) return;
       const image = element('img', 'image-preview'); image.alt = 'Shared photo';
-      image.width = width; image.height = height;
-      image.style.objectFit = 'contain';
-      image.onload = () => { button.classList.remove('loading'); button.removeAttribute('aria-busy'); };
-      image.onerror = unavailable; button.append(image); image.src = url;
+      if (width) { image.width = width; image.height = height; }
+      image.onload = () => {
+        // Older messages have no stored size: use the real one once the bytes are here.
+        if (!width && image.naturalWidth) sizeTo(image.naturalWidth, image.naturalHeight);
+        button.classList.remove('loading'); button.removeAttribute('aria-busy');
+      };
+      image.onerror = unavailable; image.decoding = 'async'; button.append(image); image.src = url;
       button.onclick = () => {
         if (!roomAllowed(roomId)) return;
         $('lightbox-image').src = url; $('lightbox-image').alt = file.name;
@@ -679,10 +786,11 @@ $('message-form').onsubmit = async event => {
   }
 };
 function setAuthMode(create) {
-  creatingAccount = create; $('confirm-label').hidden = $('confirm-input').hidden = !create; $('confirm-input').required = create;
+  creatingAccount = create; $('confirm-field').hidden = !create; $('confirm-input').required = create;
   $('password-input').autocomplete = create ? 'new-password' : 'current-password';
   $('login-mode').setAttribute('aria-pressed', String(!create)); $('register-mode').setAttribute('aria-pressed', String(create));
-  $('login-button').textContent = create ? 'Create account' : 'Log in'; $('login-error').textContent = '';
+  document.querySelector('.auth-modes').classList.toggle('create', create);
+  $('login-label').textContent = create ? 'Create account' : 'Log in'; $('login-error').textContent = '';
 }
 $('login-mode').onclick = () => setAuthMode(false); $('register-mode').onclick = () => setAuthMode(true);
 $('password-toggle').onclick = () => {
@@ -711,7 +819,7 @@ function signedOut(message) {
   $('sending-state').hidden = true; document.documentElement.style.removeProperty('--accent'); updateTitle();
 }
 $('login-form').onsubmit = async event => {
-  event.preventDefault(); $('login-button').disabled = true; $('login-error').textContent = '';
+  event.preventDefault(); $('login-button').disabled = true; $('login-button').classList.add('loading'); $('login-error').textContent = '';
   try {
     const username = $('name-input').value.trim(), password = $('password-input').value;
     if (!username || [...username].length > 20 || /[|\p{Cc}]/u.test(username)) throw new Error('Use 1–20 characters without | or control characters.');
@@ -720,7 +828,7 @@ $('login-form').onsubmit = async event => {
     explicitLogin = true; if (!socket.connected) socket.connect();
     signedIn(await request(creatingAccount ? 'register' : 'login', { username, password }));
   } catch (error) { $('login-error').textContent = error.message; }
-  finally { explicitLogin = false; $('login-button').disabled = false; }
+  finally { explicitLogin = false; $('login-button').disabled = false; $('login-button').classList.remove('loading'); }
 };
 $('logout-button').onclick = async () => {
   try { await request('logout', {}); storeToken(''); sessionToken = ''; signedOut('You have logged out.'); }
@@ -871,10 +979,10 @@ document.addEventListener('visibilitychange', () => {
 const leaveGroup = element('button', 'secondary', 'Leave group'); leaveGroup.type = 'button';
 async function leaveSelectedGroup() {
   const room = groups.find(g => g.roomId === (selectedGroupId || activeRoom?.roomId)); if (!room) return;
-  leaveGroup.disabled = $('group-leave-action').disabled = true;
+  leaveGroup.disabled = true;
   try { await request('group_leave', { roomId: room.roomId }); if (selectedGroupId === room.roomId) selectedGroupId = null; $('member-list').close(); renderLists(); toast('Left ' + room.name); }
   catch (error) { showError(error); }
-  finally { leaveGroup.disabled = $('group-leave-action').disabled = false; }
+  finally { leaveGroup.disabled = false; }
 }
 leaveGroup.onclick = leaveSelectedGroup;
 $('member-list-content').after(leaveGroup);
@@ -943,3 +1051,14 @@ socket.on('read_update', ({ roomId, username, messageId }) => {
 });
 $('lightbox-download').replaceChildren(icon('download'));
 $('lightbox-download').setAttribute('aria-label', 'Download photo');
+// Members learn about deletes/clears from the server; the creator already got a toast from their own action.
+socket.on('group_deleted', ({ roomId, name, by }) => {
+  if (activeRoom?.roomId === roomId) clearRoom();
+  if (selectedGroupId === roomId) selectedGroupId = null;
+  wipeLocalRoom(roomId); histories.delete(roomId); readStates.delete(roomId);
+  if (by !== myName) toast(name + ' was deleted by ' + by);
+});
+socket.on('room_cleared', ({ roomId, by }) => {
+  wipeLocalRoom(roomId);
+  if (by !== myName && activeRoom?.roomId === roomId) toast(by + ' cleared this chat');
+});
