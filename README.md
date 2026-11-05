@@ -78,11 +78,7 @@ See [docs/PROTOCOL.md](docs/PROTOCOL.md) for every event and payload.
   All six accents meet WCAG AA contrast with white text.
 - **Typing and unread:** private typing indicators expire if a stop event is lost.
   Saved unread badges and the browser tab total update as conversations are read.
-- **Chat UI:** searchable people/groups, offline DM history, message previews,
-  relative times, stacked member avatars, date separators, grouped messages,
-  join/leave notices, emoji picker, multiline composer, loading skeletons, toasts
-  and a scroll-aware new-message pill. At 768 px and below, Back returns to the
-  conversation list. Keyboard focus and reduced-motion preferences are supported.
+- **Chat UI:** Discord-style layout with WongChat’s own W identity: a 72 px joined-group rail, 240 px DM/channel panel with user settings, left-aligned message rows, and a toggleable 240 px member/profile column. Compact follow-ups, date and unread dividers, read receipts, search, emoji, AI tools and private attachments remain available. Below 1024 px the right panel opens as a drawer; below 768 px the 64 px rail and conversation list lead to a full-screen chat with browser Back support. The composer and reserved typing line follow the mobile visual viewport and safe area. Light, dark and system themes use IBM Plex Sans Thai and respect reduced motion.
 - **Cloud deployment:** systemd and Caddy templates support a single persistent
   Node.js service, HTTPS and Socket.IO upgrades. Deployment remains an
   administrator operation; these templates do not deploy the app.
@@ -172,8 +168,4 @@ deploy/Caddyfile.snippet configures chat.natdanaihs.com to reverse proxy
 127.0.0.1:3100, including Socket.IO upgrades on its default path. DNS, TLS,
 service installation and production deployment are separate administrator tasks.
 
-The UI uses Inter from Google Fonts with system fallbacks if unavailable. All chat,
-profile and attachment data still travels only through Socket.IO. No build step or
-new npm dependencies are needed. Enter sends, Shift+Enter adds a line; keyboard
-focus rings and reduced-motion preferences are supported. At 768 px and below,
-Back returns from a room to the conversation list. Unread totals appear in the tab title.
+The UI uses IBM Plex Sans Thai with system fallbacks. All chat, profile and attachment data travels through Socket.IO. No build step or new npm dependencies are needed. Enter sends and Shift+Enter adds a line. Unread totals appear in the tab title.

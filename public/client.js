@@ -5,6 +5,8 @@ const $ = id => document.getElementById(id);
 // All UI icons share one SVG source; user content is always written with textContent.
 function icon(name) {
   const paths = {
+    compass: ['M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Z','m16 8-3 5-5 3 3-5Z'],
+    chevron: ['m6 9 6 6 6-6'], settings: ['M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z','m9 3 1-2h4l1 2 3 2 3 1v4l-2 2v3l-2 3-3 1-2 2h-4l-1-2-3-2-2-3v-4l2-2V6Z'], arrow: ['M4 12h16m-6-6 6 6-6 6'],
     chat: ['M21 11.5a8.5 8.5 0 0 1-8.5 8.5H3l2-5a8.5 8.5 0 1 1 16-3.5Z','M8 10h8M8 14h5'],
     plus: ['M12 5v14M5 12h14'], close: ['m6 6 12 12M6 18 18 6'],
     back: ['m15 18-6-6 6-6'], send: ['M12 19V5m-6 6 6-6 6 6'],
@@ -27,7 +29,7 @@ function icon(name) {
   return svg;
 }
 document.querySelectorAll('[data-icon]').forEach(node => node.replaceChildren(icon(node.dataset.icon)));
-for (const [id, name] of Object.entries({ 'back-button': 'back', 'attach-button': 'attach', 'emoji-button': 'smile', 'ai-button': 'sparkles', 'password-toggle': 'eye' })) $(id).replaceChildren(icon(name));
+for (const [id, name] of Object.entries({ 'back-button': 'back', 'attach-button': 'plus', 'emoji-button': 'smile', 'ai-button': 'sparkles', 'password-toggle': 'eye' })) $(id).replaceChildren(icon(name));
 document.querySelectorAll('[data-close]').forEach(node => node.replaceChildren(icon('close')));
 document.querySelectorAll('[data-theme-choice]').forEach(node => node.replaceChildren(icon({light:'sun',dark:'moon',system:'monitor'}[node.dataset.themeChoice])));
 $('new-messages').replaceChildren(icon('download'), document.createTextNode('New messages'));
@@ -88,6 +90,89 @@ let creatingAccount = false, sessionToken = '', explicitLogin = false;
 let activeRoom = null, openingVersion = 0, accountVersion = 0;
 let typingTimer, lastTypingSent = 0, sendingCount = 0;
 let draftAvatar = null, draftColor = colors[0], photoVersion = 0;
+
+let selectedGroupId = null;
+let contextVisible = matchMedia('(min-width: 1024px)').matches;
+function setContext(visible) {
+  contextVisible = visible; renderContext();
+}
+function renderNavigation() {
+  const group = groups.find(g => g.roomId === selectedGroupId && g.members.includes(myName));
+  $('home-panel').hidden = !!group; $('group-panel').hidden = !group;
+  $('home-button').classList.toggle('selected', !group);
+  const dmUnread = directRooms.reduce((sum, r) => sum + (unread.get(r.roomId) || 0), 0);
+  $('home-button').classList.toggle('has-unread', dmUnread > 0);
+  $('home-button').setAttribute('aria-current', group ? 'false' : 'page');
+  $('home-button').setAttribute('aria-label', 'WongChat Home' + (dmUnread ? ', ' + dmUnread + ' unread' : ''));
+  $('home-button').querySelector('.badge')?.remove();
+  if (dmUnread) $('home-button').append(element('span', 'badge', dmUnread > 99 ? '99+' : String(dmUnread)));
+  $('joined-groups').replaceChildren();
+  for (const g of groups.filter(g => g.members.includes(myName))) {
+    const count = unread.get(g.roomId) || 0, button = element('button', 'rail-icon' + (group?.roomId === g.roomId ? ' selected' : '') + (count ? ' has-unread' : ''));
+    button.type = 'button'; button.setAttribute('aria-current', group?.roomId === g.roomId ? 'page' : 'false'); button.style.setProperty('--group-color', defaultColor(g.name));
+    button.setAttribute('aria-label', g.name + (count ? ', ' + count + ' unread' : '')); button.title = g.name;
+    button.append(element('span', '', g.name.trim().split(/\s+/).slice(0, 2).map(n => [...n][0]).join('').toUpperCase()));
+    button.append(element('span', 'rail-tooltip', g.name));
+    if (count) button.append(element('span', 'badge', count > 99 ? '99+' : String(count)));
+    button.onclick = () => {
+      $('group-menu').hidden = true; $('group-menu-button').setAttribute('aria-expanded', 'false'); selectedGroupId = g.roomId;
+      if (matchMedia('(max-width: 767px)').matches) { clearRoom(); renderLists(); }
+      else void openRoom({ roomId: g.roomId }, g.name, 'group');
+    };
+    $('joined-groups').append(button);
+  }
+  if (group) $('selected-group-name').textContent = group.name;
+}
+function renderContext() {
+  const available = !!activeRoom;
+  $('chat-app').classList.toggle('context-open', available && contextVisible);
+  $('context-panel').hidden = !available || !contextVisible;
+  $('members-toggle').disabled = !available;
+  $('members-toggle').setAttribute('aria-expanded', String(available && contextVisible));
+  $('drawer-backdrop').hidden = !available || !contextVisible || matchMedia('(min-width: 1024px)').matches;
+  const content = $('context-content'); content.replaceChildren();
+  if (!activeRoom) return;
+  if (activeRoom.kind === 'private') {
+    $('context-title').textContent = 'Profile';
+    const name = activeRoom.title, profile = profileFor(name), banner = element('div', 'profile-banner'); banner.style.background = profile.color;
+    const details = element('div', 'profile-details');
+    details.append(avatar(name, 'large', false), element('h2', '', name), element('small', '', users.includes(name) ? 'Online' : 'Offline'), element('h3', '', 'ABOUT ME'), element('p', '', profile.bio || 'No bio yet.'));
+    if (profile.createdAt && !Number.isNaN(Date.parse(profile.createdAt))) details.append(element('h3', '', 'MEMBER SINCE'), element('p', '', new Date(profile.createdAt).toLocaleDateString()));
+    content.append(banner, details); return;
+  }
+  $('context-title').textContent = 'Members';
+  const group = groups.find(g => g.roomId === activeRoom.roomId); if (!group) return;
+  for (const online of [true, false]) {
+    const names = group.members.filter(n => users.includes(n) === online);
+    content.append(element('h3', '', (online ? 'ONLINE — ' : 'OFFLINE — ') + names.length));
+    for (const name of names) {
+      const row = element('button', 'context-member'); row.type = 'button';
+      const copy = element('span', 'user-copy'); copy.append(element('strong', '', name), element('small', '', profileFor(name).bio || (online ? 'Online' : 'Offline')));
+      row.append(avatar(name, '', false), copy); row.onclick = () => showProfile(name); content.append(row);
+    }
+  }
+}
+$('home-button').onclick = () => { selectedGroupId = null; clearRoom(); renderLists(); };
+$('discover-button').onclick = () => { renderLists(); $('discover-sheet').showModal(); };
+$('start-dm').onclick = () => { renderLists(); $('dm-picker').showModal(); };
+$('settings-button').onclick = () => $('me-sheet').showModal();
+$('theme-toggle').onclick = () => {
+  themeChoice = ['system', 'light', 'dark'][(['system', 'light', 'dark'].indexOf(themeChoice) + 1) % 3];
+  try { localStorage.setItem('campus-chat-theme', themeChoice); } catch {}
+  applyTheme(); $('theme-toggle').setAttribute('aria-label', 'Theme: ' + themeChoice + '. Cycle colour theme');
+};
+$('members-toggle').onclick = () => setContext(!contextVisible);
+$('close-context').onclick = $('drawer-backdrop').onclick = () => setContext(false);
+$('group-menu-button').onclick = () => { $('group-menu').hidden = !$('group-menu').hidden; $('group-menu-button').setAttribute('aria-expanded', String(!$('group-menu').hidden)); };
+$('group-members-action').onclick = () => { $('group-menu').hidden = true; if (activeRoom?.roomId === selectedGroupId) setContext(true); else { renderMembers(); $('member-list').showModal(); } };
+$('group-leave-action').onclick = () => { $('group-menu').hidden = true; void leaveSelectedGroup(); };
+$('general-channel').onclick = () => { const g = groups.find(g => g.roomId === selectedGroupId); if (g) void openRoom({ roomId: g.roomId }, g.name, 'group'); };
+$('side-summarize').onclick = () => { if (!$('summarize').disabled) $('summarize').click(); };
+const wideLayout = matchMedia('(min-width: 1024px)');
+wideLayout.addEventListener('change', () => setContext(wideLayout.matches));
+window.addEventListener('resize', renderContext);
+document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('group-menu').hidden = true; if (!wideLayout.matches) setContext(false); } });
+
 const tokenStorageKey = 'campus-chat-token';
 const histories = new Map(), summaries = new Map(), unread = new Map(), typers = new Map();
 const lastMessages = new Map(), readStates = new Map();
@@ -186,6 +271,7 @@ function showProfile(name) {
 function updateIdentity() {
   if (!myName) return;
   $('my-name').textContent = myName;
+  $('panel-name').textContent = myName; $('panel-bio').textContent = profileFor(myName).bio || 'Online';
   $('my-avatar').replaceChildren(avatar(myName, '', false));
   document.documentElement.style.setProperty('--accent', profileFor(myName).color);
   try { localStorage.setItem('campus-chat-accent', profileFor(myName).color); } catch {}
@@ -198,7 +284,7 @@ function updateTitle() {
   const canvas = document.createElement('canvas'); canvas.width = canvas.height = 32;
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#2563EB'; ctx.beginPath(); ctx.roundRect(0, 0, 32, 32, 8); ctx.fill();
-  ctx.fillStyle = '#FFFFFF'; ctx.font = 'bold 22px system-ui'; ctx.fillText('W', 5, 24);
+  ctx.fillStyle = '#FFFFFF'; ctx.font = '600 22px system-ui'; ctx.fillText('W', 5, 24);
   if (total) { ctx.beginPath(); ctx.arc(26, 6, 6, 0, Math.PI * 2); ctx.fillStyle = '#EF4444'; ctx.fill(); }
   document.querySelector('link[rel="icon"]').href = canvas.toDataURL();
 }
@@ -242,7 +328,8 @@ function renderHeader() {
     $('room-title').textContent = 'A little closer, in real time.';
     $('room-kind').textContent = 'YOUR CONVERSATIONS'; $('room-title').onclick = null; $('room-title').removeAttribute('tabindex'); $('room-title').removeAttribute('role'); return;
   }
-  $('room-title').textContent = activeRoom.title;
+  $('room-title').textContent = activeRoom.kind === 'group' ? '# general · ' + activeRoom.title : '@ ' + activeRoom.title;
+  $('message-input').placeholder = activeRoom.kind === 'group' ? 'Message #general' : 'Message @' + activeRoom.title;
   if (activeRoom.kind === 'private') {
     $('header-avatar').append(avatar(activeRoom.title));
     $('room-kind').textContent = users.includes(activeRoom.title) ? 'online' : 'offline';
@@ -252,7 +339,7 @@ function renderHeader() {
     const groupAvatar = element('span', 'avatar'); groupAvatar.append(icon('users')); $('header-avatar').append(groupAvatar);
     const group = groups.find(g => g.roomId === activeRoom.roomId);
     $('room-kind').textContent = memberCount(group?.members.length || 0);
-    $('room-members').textContent = '';
+    $('room-members').textContent = memberCount(group?.members.length || 0);
     $('room-members').setAttribute('aria-label', 'View group members');
     $('room-title').onclick = null; $('room-title').removeAttribute('tabindex'); $('room-title').removeAttribute('role');
   }
@@ -262,50 +349,51 @@ function renderLists() {
   const search = $('sidebar-search').value.trim().toLowerCase();
   const matches = name => name.toLowerCase().includes(search);
   $('users').replaceChildren(); $('direct-messages').replaceChildren(); $('groups').replaceChildren();
-  const online = users.filter(name => name !== myName && matches(name));
+  const peopleSearch = $('dm-search').value.trim().toLowerCase();
+  const online = users.filter(name => name !== myName && name.toLowerCase().includes(peopleSearch));
   $('user-count').textContent = online.length;
   for (const name of online) {
     const row = element('li', 'online-person'), button = element('button'); button.type = 'button';
-    button.append(avatar(name, '', false), element('span', '', name)); button.onclick = () => openRoom({ target: name }, name, 'private');
+    button.append(avatar(name, '', false), element('span', '', name)); button.onclick = () => { $('dm-picker').close(); void openRoom({ target: name }, name, 'private'); };
     row.append(button); $('users').append(row);
   }
-  const chats = [...directRooms.map(r => ({ ...r, title: r.target, kind: 'private' })),
-    ...groups.filter(g => g.members.includes(myName)).map(g => ({ ...g, title: g.name, kind: 'group' }))];
+  const chats = directRooms.map(r => ({ ...r, title: r.target, kind: 'private' }));
   chats.sort((a, b) => Number(!!unread.get(b.roomId)) - Number(!!unread.get(a.roomId)) ||
     (lastMessages.get(b.roomId)?.time || '').localeCompare(lastMessages.get(a.roomId)?.time || '') || a.title.localeCompare(b.title));
   for (const room of chats.filter(r => matches(r.title))) {
     $('direct-messages').append(makeRow(room.title, room.roomId, () => openRoom({ roomId: room.roomId }, room.title, room.kind), 'Start the conversation', room.kind === 'group'));
   }
-  for (const group of groups.filter(g => !g.members.includes(myName) && matches(g.name))) {
+  for (const group of groups.filter(g => !g.members.includes(myName) && g.name.toLowerCase().includes($('discover-search').value.trim().toLowerCase()))) {
     const row = makeRow(group.name, group.roomId, () => {}, memberCount(group.members.length), true);
     const join = element('button', 'small-button', 'Join'); join.type = 'button'; join.setAttribute('aria-label', 'Join ' + group.name);
-    join.onclick = async () => { join.disabled = true; try { await request('group_join', { roomId: group.roomId }); await openRoom({ roomId: group.roomId }, group.name, 'group'); } catch (error) { showError(error); join.disabled = false; } };
+    join.onclick = async () => { join.disabled = true; try { await request('group_join', { roomId: group.roomId }); $('discover-sheet').close(); await openRoom({ roomId: group.roomId }, group.name, 'group'); } catch (error) { showError(error); join.disabled = false; } };
     row.querySelector('.list-button').onclick = () => join.click();
     row.append(join); $('groups').append(row);
   }
   for (const [id, text] of [['users', 'No one else is online.'], ['direct-messages', 'Your conversations will appear here.'], ['groups', 'No new groups to discover.']]) {
     if (!$(id).childElementCount) { const empty = element('li', 'list-empty'); empty.append(icon('chat'), element('span', '', search ? 'No matches found.' : text)); $(id).append(empty); }
   }
-  updateTitle(); renderHeader();
+  updateTitle(); renderHeader(); renderNavigation(); renderContext();
 }
-$('sidebar-search').oninput = renderLists;
+$('sidebar-search').oninput = $('dm-search').oninput = $('discover-search').oninput = renderLists;
 function setComposer(enabled) {
   for (const id of ['message-input', 'send-button', 'summarize', 'attach-button', 'emoji-button', 'ai-button']) $(id).disabled = !enabled;
 }
 function clearRoom() {
   stopTyping(); openingVersion++; activeRoom = null; firstUnreadId = null;
+  if (!wideLayout.matches) contextVisible = false;
   $('messages').removeAttribute('aria-busy');
   setComposer(false); $('chat-app').classList.remove('room-open'); syncScreens();
   $('emoji-picker').hidden = true; $('emoji-button').setAttribute('aria-expanded', 'false');
   $('new-messages').hidden = true;
-  renderHeader(); renderMessages(true);
+  renderHeader(); renderNavigation(); renderContext(); renderMessages(true);
 }
 async function openRoom(payload, title, kind) {
   stopTyping(); firstUnreadId = null; const version = ++openingVersion;
   const requestedId = payload.roomId || dmId(payload.target);
   const unreadCount = unread.get(requestedId) || 0;
   activeRoom = null; setComposer(false);
-  if (matchMedia('(max-width: 768px)').matches && history.state?.wongchat !== 'room') history.pushState({ wongchat: 'room' }, '');
+  if (matchMedia('(max-width: 767px)').matches && history.state?.wongchat !== 'room') history.pushState({ wongchat: 'room' }, '');
   $('chat-app').classList.add('room-open'); syncScreens();
   $('room-title').textContent = title; $('room-kind').textContent = 'LOADING CONVERSATION…';
   $('messages').replaceChildren(); $('messages').setAttribute('aria-busy', 'true');
@@ -314,6 +402,7 @@ async function openRoom(payload, title, kind) {
     const result = await request('room_open', { ...payload, read: document.visibilityState === 'visible' });
     if (version !== openingVersion) return;
     activeRoom = { roomId: result.roomId, title, kind };
+    selectedGroupId = kind === 'group' ? result.roomId : null;
     const combined = new Map(result.messages.map(message => [message.id, message]));
     // Keep echoes received while the room history was in flight.
     for (const message of histories.get(result.roomId) || []) {
@@ -330,7 +419,7 @@ async function openRoom(payload, title, kind) {
     setComposer(true); $('message-input').value = ''; growComposer();
     $('new-messages').hidden = true; renderLists(); renderMessages(true);
     if (firstUnreadId) requestAnimationFrame(() => $('unread-divider')?.scrollIntoView({ block: 'start' }));
-    if (matchMedia('(min-width: 769px)').matches) $('message-input').focus();
+    if (matchMedia('(min-width: 768px)').matches) $('message-input').focus();
   } catch (error) {
     if (version === openingVersion) { clearRoom(); showError(error); }
   } finally { if (version === openingVersion) $('messages').removeAttribute('aria-busy'); }
@@ -369,23 +458,29 @@ function renderMessages(forceBottom = false) {
     messages.forEach((message, index) => {
       const day = new Date(message.time).toDateString();
       if (day !== lastDate) { $('messages').append(element('div', 'date-separator', dateLabel(message.time))); lastDate = day; }
-      if (message.id && message.id === firstUnreadId) { const divider = element('div', 'unread-divider', 'New messages'); divider.id = 'unread-divider'; $('messages').append(divider); }
-      if (message.kind === 'system') { $('messages').append(element('p', 'system-message', message.text)); return; }
+      if (message.id && message.id === firstUnreadId) { const divider = element('div', 'unread-divider'); divider.append(element('span', 'new-tag', 'NEW')); divider.id = 'unread-divider'; $('messages').append(divider); }
+      if (message.kind === 'system') { const line = element('p', 'system-message'); line.append(icon('arrow'), element('span', '', message.text)); $('messages').append(line); return; }
       const own = message.sender === myName && ['chat', 'file'].includes(message.kind);
-      const grouped = sameGroup(messages[index - 1], message), last = !sameGroup(message, messages[index + 1]);
-      const row = element('div', 'message-row' + (own ? ' own' : '') + (grouped ? ' grouped' : '') + (message.kind === 'ai' ? ' ai' : ''));
-      if (!own) { const slot = element('span', 'message-avatar'); if (last && message.kind !== 'ai') slot.append(avatar(message.sender, 'small')); row.append(slot); }
-      const stack = element('div', 'bubble-stack'), article = element('article', 'message' + (message.kind === 'file' ? (isImage(message.file) ? ' photo-message' : ' attachment') : ''));
-      if (!own && !grouped && activeRoom.kind === 'group' && message.kind !== 'ai') {
-        const name = element('button', 'message-name', message.sender); name.type = 'button'; name.onclick = () => showProfile(message.sender); stack.append(name);
+      const grouped = sameGroup(messages[index - 1], message), ai = message.kind === 'ai' || message.sender === 'AI Bot';
+      const row = element('div', 'message-row' + (own ? ' own' : '') + (grouped ? ' grouped' : '') + (ai ? ' ai' : ''));
+      const time = element('time', '', new Date(message.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); time.dateTime = message.time;
+      const slot = element('div', 'message-avatar');
+      if (!grouped) {
+        if (ai) { const bot = element('span', 'avatar bot-avatar'); bot.append(icon('sparkles')); slot.append(bot); }
+        else slot.append(avatar(message.sender));
+      } else { time.className = 'gutter-time'; slot.append(time); }
+      row.append(slot);
+      const stack = element('div', 'message-stack'), article = element('article', 'message' + (message.kind === 'file' ? (isImage(message.file) ? ' photo-message' : ' attachment') : ''));
+      if (!grouped) {
+        const heading = element('div', 'message-heading'), name = element(ai ? 'span' : 'button', 'message-name', message.sender);
+        name.style.color = ai ? 'var(--accent)' : profileFor(message.sender).color;
+        if (!ai) { name.type = 'button'; name.onclick = () => showProfile(message.sender); }
+        heading.append(name); if (ai) heading.append(element('span', 'ai-chip', 'AI')); heading.append(time); stack.append(heading);
       }
-      if (message.kind === 'ai') { const chip = element('span', 'ai-chip', 'AI'); chip.prepend(icon('sparkles')); stack.append(chip); }
       if (message.kind === 'file') article.append(fileContent(message)); else article.append(element('p', 'message-text', message.text));
       stack.append(article);
       if (own) { row.dataset.messageId = message.id; stack.dataset.ownMessage = message.id; }
-      const time = element('time', '', new Date(message.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })); time.dateTime = message.time;
-      if (own && last) row.append(time);
-      row.append(stack); if (!own && last) row.append(time);
+      row.append(stack);
       $('messages').append(row);
     });
   }
@@ -422,7 +517,8 @@ function fileContent(message) {
     const button = element('button', 'image-button loading'); button.type = 'button';
     button.setAttribute('aria-label', 'Open image ' + file.name);
     const width = file.width || 240, height = file.height || 180;
-    const displayWidth = Math.min(width, 260), displayHeight = Math.min(height * displayWidth / width, 320);
+    const scale = Math.min(1, 400 / width, 300 / height);
+    const displayWidth = width * scale, displayHeight = height * scale;
     button.style.width = displayWidth + 'px'; button.style.aspectRatio = displayWidth + ' / ' + displayHeight;
     button.setAttribute('aria-busy', 'true');
     const unavailable = () => {
@@ -434,7 +530,7 @@ function fileContent(message) {
       if (!button.isConnected) return;
       const image = element('img', 'image-preview'); image.alt = 'Shared photo';
       image.width = width; image.height = height;
-      image.style.objectFit = height * displayWidth / width > 320 ? 'cover' : 'contain';
+      image.style.objectFit = 'contain';
       image.onload = () => { button.classList.remove('loading'); button.removeAttribute('aria-busy'); };
       image.onerror = unavailable; button.append(image); image.src = url;
       button.onclick = () => {
@@ -606,7 +702,7 @@ function signedOut(message) {
   accountVersion++; clearRoom(); forgetFiles();
   dismissBanner(); clearTimeout(typingExpiryTimer); typingSignature = ''; $('typing-text').textContent = ''; $('typing-indicator').classList.remove('is-visible');
   if (history.state?.wongchat === 'room') history.replaceState({ wongchat: 'list' }, '');
-  myName = ''; users = []; groups = []; directRooms = []; profiles = {};
+  selectedGroupId = null; myName = ''; users = []; groups = []; directRooms = []; profiles = {};
   readStates.clear(); histories.clear(); summaries.clear(); unread.clear(); typers.clear(); lastMessages.clear();
   document.querySelectorAll('dialog[open]').forEach(dialog => dialog.close());
   $('toasts').replaceChildren(); $('sidebar-search').value = ''; $('message-input').value = '';
@@ -700,7 +796,7 @@ $('profile-form').onsubmit = async event => {
   finally { $('save-profile').disabled = false; }
 };
 function renderMembers() {
-  const group = groups.find(g => g.roomId === activeRoom?.roomId); $('member-list-content').replaceChildren();
+  const group = groups.find(g => g.roomId === (selectedGroupId || activeRoom?.roomId)); $('member-list-content').replaceChildren();
   if (!group) { $('member-list').close(); return; }
   for (const name of group.members) {
     const row = element('li', 'member-row'), button = element('button', 'text-button', name); button.type = 'button';
@@ -718,6 +814,7 @@ socket.on('users_update', list => { users = list; renderLists(); if ($('member-l
 socket.on('profiles_update', list => { profiles = list; if (!myName) return; updateIdentity(); renderLists(); renderMessages(); if ($('member-list').open) renderMembers(); });
 socket.on('groups_update', list => {
   groups = list;
+  if (selectedGroupId && !groups.some(g => g.roomId === selectedGroupId && g.members.includes(myName))) selectedGroupId = null;
   if (activeRoom?.kind === 'group' && !groups.some(g => g.roomId === activeRoom.roomId && g.members.includes(myName))) clearRoom();
   const cached = new Set([...histories.keys(), ...unread.keys(), ...lastMessages.keys()]);
   for (const id of cached) {
@@ -772,13 +869,21 @@ document.addEventListener('visibilitychange', () => {
   else if (activeRoom && document.visibilityState === 'visible') { markOpenRead(); renderLists(); renderMessages(); }
 });
 const leaveGroup = element('button', 'secondary', 'Leave group'); leaveGroup.type = 'button';
-leaveGroup.onclick = async () => { const room = activeRoom; if (room?.kind !== 'group') return; leaveGroup.disabled = true; try { await request('group_leave', { roomId: room.roomId }); $('member-list').close(); toast('Left ' + room.title); } catch (error) { showError(error); } finally { leaveGroup.disabled = false; } };
+async function leaveSelectedGroup() {
+  const room = groups.find(g => g.roomId === (selectedGroupId || activeRoom?.roomId)); if (!room) return;
+  leaveGroup.disabled = $('group-leave-action').disabled = true;
+  try { await request('group_leave', { roomId: room.roomId }); if (selectedGroupId === room.roomId) selectedGroupId = null; $('member-list').close(); renderLists(); toast('Left ' + room.name); }
+  catch (error) { showError(error); }
+  finally { leaveGroup.disabled = $('group-leave-action').disabled = false; }
+}
+leaveGroup.onclick = leaveSelectedGroup;
 $('member-list-content').after(leaveGroup);
 
 function syncScreens() {
-  const mobile = matchMedia('(max-width: 768px)').matches, open = $('chat-app').classList.contains('room-open');
+  const mobile = matchMedia('(max-width: 767px)').matches, open = $('chat-app').classList.contains('room-open');
   document.querySelector('.sidebar').inert = mobile && open;
   $('chat-window').inert = mobile && !open;
+  document.querySelector('.rail').inert = mobile && open;
 }
 window.addEventListener('resize', syncScreens); syncScreens();
 // The AI button starts the message with "@ai " so users discover the AI command.
@@ -808,7 +913,7 @@ function renderReceipts() {
   $('messages').querySelectorAll('.read-receipt').forEach(node => node.remove());
   if (!activeRoom) return;
   const own = (histories.get(activeRoom.roomId) || []).filter(m => m.sender === myName && ['chat', 'file'].includes(m.kind));
-  const latest = own.at(-1), latestRead = own.findLast(m => readersFor(m).length);
+  const latest = own.at(-1);
   for (const stack of $('messages').querySelectorAll('[data-own-message]')) {
     const message = own.find(m => m.id === stack.dataset.ownMessage);
     if (!message) continue;
@@ -820,7 +925,7 @@ function renderReceipts() {
         $('read-sheet').dataset.roomId = message.roomId; $('read-sheet').dataset.messageId = message.id;
         renderReadSheet(); $('read-sheet').showModal();
       }; stack.append(receipt);
-    } else if (message === latestRead || (message === latest && !readers.length)) {
+    } else if (message === latest) {
       stack.append(element('small', 'read-receipt', readers.length ? 'Read' : 'Sent'));
     }
   }

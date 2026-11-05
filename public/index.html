@@ -15,10 +15,10 @@
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css?v=6">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css?v=7">
   <script src="/socket.io/socket.io.js" defer></script>
-  <script src="/client.js?v=6" defer></script>
+  <script src="/client.js?v=7" defer></script>
 </head>
 <body>
   <section id="login-screen" class="login-screen">
@@ -34,26 +34,39 @@
     </form>
   </section>
   <div id="chat-app" class="app" hidden>
+    <nav class="rail" aria-label="Home and joined groups">
+      <button id="home-button" class="rail-icon home-logo" aria-label="WongChat Home" title="WongChat Home">W</button>
+      <div class="rail-separator"></div><div id="joined-groups" class="joined-groups"></div>
+      <button id="create-group-button" class="rail-icon rail-action" aria-label="Create group" title="Create group" data-icon="plus"></button>
+      <button id="discover-button" class="rail-icon rail-action" aria-label="Discover groups" title="Discover groups" data-icon="compass"></button>
+    </nav>
     <aside class="sidebar">
-      <header class="brand"><span class="logo">W</span><strong>WongChat</strong><button id="create-group-button" class="icon-button" aria-label="Create group" data-icon="plus"></button><button id="me-button" class="avatar-button" aria-label="Open Me"><span id="my-avatar"></span></button></header>
-      <label class="sr-only" for="sidebar-search">Search conversations</label><input id="sidebar-search" type="search" placeholder="Search people & groups">
-      <div class="conversation-lists">
-        <section><h2>Chats</h2><ul id="direct-messages"></ul></section>
-        <section><h2>Online now <span id="user-count"></span></h2><ul id="users" class="online-list"></ul></section>
-        <section><h2>Discover groups</h2><ul id="groups"></ul></section>
+      <div id="home-panel" class="side-content">
+        <header class="side-search"><label class="sr-only" for="sidebar-search">Find or start a conversation</label><input id="sidebar-search" type="search" placeholder="Find or start a conversation"></header>
+        <div class="conversation-lists"><h2>Direct Messages <button id="start-dm" class="icon-button" aria-label="Start direct message" data-icon="plus"></button></h2><ul id="direct-messages"></ul></div>
       </div>
+      <div id="group-panel" class="side-content" hidden>
+        <button id="group-menu-button" class="group-heading" aria-expanded="false"><strong id="selected-group-name"></strong><span data-icon="chevron"></span></button>
+        <div id="group-menu" class="group-menu" hidden><button id="group-members-action" class="secondary">Members</button><button id="group-leave-action" class="secondary">Leave group</button></div>
+        <div class="channel-list"><h2>TEXT CHANNELS</h2><button id="general-channel" class="channel selected"># general</button><h2>AI TOOLS</h2><button id="side-summarize" class="channel"><span data-icon="sparkles"></span>Summarize chat</button></div>
+      </div>
+      <footer class="user-panel"><button id="me-button" class="avatar-button" aria-label="Open settings"><span id="my-avatar"></span></button><div class="user-copy"><strong id="panel-name"></strong><small id="panel-bio"></small></div><button id="theme-toggle" class="icon-button" aria-label="Cycle colour theme" data-icon="moon"></button><button id="settings-button" class="icon-button" aria-label="Settings" data-icon="settings"></button></footer>
     </aside>
     <main id="chat-window" class="main">
-      <header class="room-header"><button id="back-button" class="icon-button mobile-back" aria-label="Back to conversations" data-icon="back"></button><span id="header-avatar"></span><div class="room-heading"><h1 id="room-title">Choose a conversation</h1><p id="room-kind">Your conversations</p><button id="room-members" class="text-button" hidden></button></div><button id="summarize" class="icon-button" aria-label="Summarize conversation" title="Summarize conversation" data-icon="sparkles" disabled></button></header>
+      <header class="room-header"><button id="back-button" class="icon-button mobile-back" aria-label="Back to conversations" data-icon="back"></button><span id="header-avatar"></span><div class="room-heading"><h1 id="room-title">Choose a conversation</h1><p id="room-kind">Your conversations</p><button id="room-members" class="text-button" hidden></button></div><button id="members-toggle" class="icon-button" aria-label="Toggle members or profile" aria-expanded="true" data-icon="users"></button><button id="summarize" class="icon-button" aria-label="Summarize conversation" title="Summarize conversation" data-icon="sparkles" disabled></button></header>
       <div class="conversation-area"><div id="messages" class="messages" role="log" aria-live="polite"></div>
       <button id="new-messages" class="new-messages" hidden>New messages</button>
-      <div id="drop-hint" class="drop-hint" hidden>Drop a file to share<br><small>Up to 5 MB • only this conversation</small></div><div id="typing-indicator" class="typing" aria-live="polite"><span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span><span id="typing-text"></span></div></div>
+      <div id="drop-hint" class="drop-hint" hidden>Drop a file to share<br><small>Up to 5 MB • only this conversation</small></div></div>
       <div class="composer-wrap"><div id="emoji-picker" class="emoji-picker" hidden aria-label="Emoji picker"></div>
       <div id="sending-state" class="sending-state" role="status" hidden></div>
-      <form id="message-form" class="composer"><button id="attach-button" type="button" class="icon-button" aria-label="Attach file" disabled data-icon="attach"></button><input id="file-input" type="file" hidden><label class="sr-only" for="message-input">Message</label><textarea id="message-input" rows="1" maxlength="4000" placeholder="Message or @ai…" disabled></textarea><button id="ai-button" type="button" class="icon-button" aria-label="Ask AI (inserts @ai)" title="Ask AI" disabled data-icon="sparkles"></button><button id="emoji-button" type="button" class="icon-button" aria-label="Choose emoji" aria-expanded="false" disabled data-icon="smile"></button><button id="send-button" type="submit" aria-label="Send message" data-icon="send" disabled></button></form>
-      <p class="composer-hint">Enter to send · Shift + Enter for a new line · Files up to 5 MB</p></div>
+      <form id="message-form" class="composer"><button id="attach-button" type="button" class="icon-button" aria-label="Attach file" disabled data-icon="plus"></button><input id="file-input" type="file" hidden><label class="sr-only" for="message-input">Message</label><textarea id="message-input" rows="1" maxlength="4000" placeholder="Message or @ai…" disabled></textarea><button id="ai-button" type="button" class="icon-button" aria-label="Ask AI (inserts @ai)" title="Ask AI" disabled data-icon="sparkles"></button><button id="emoji-button" type="button" class="icon-button" aria-label="Choose emoji" aria-expanded="false" disabled data-icon="smile"></button><button id="send-button" type="submit" aria-label="Send message" data-icon="send" disabled></button></form>
+      <div id="typing-indicator" class="typing" aria-live="polite"><span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span><span id="typing-text"></span></div></div>
     </main>
+    <button id="drawer-backdrop" class="drawer-backdrop" aria-label="Close member panel" hidden></button>
+    <aside id="context-panel" class="context-panel" aria-label="Members or profile"><header class="context-heading"><strong id="context-title">Members</strong><button id="close-context" class="icon-button" aria-label="Close panel" data-icon="close"></button></header><div id="context-content"></div></aside>
   </div>
+  <dialog id="dm-picker"><div class="modal-content"><div class="modal-heading"><h2>Start a conversation</h2><button class="icon-button" data-close="dm-picker" aria-label="Close picker" data-icon="close"></button></div><label class="sr-only" for="dm-search">Find an online user</label><input id="dm-search" type="search" placeholder="Find an online user"><h2>Online now <span id="user-count"></span></h2><ul id="users" class="online-list"></ul></div></dialog>
+  <dialog id="discover-sheet"><div class="modal-content"><div class="modal-heading"><h2>Discover groups</h2><button class="icon-button" data-close="discover-sheet" aria-label="Close discovery" data-icon="close"></button></div><label class="sr-only" for="discover-search">Find a group</label><input id="discover-search" type="search" placeholder="Find a group"><ul id="groups"></ul></div></dialog>
   <dialog id="profile-editor"><form id="profile-form" class="modal-content"><div class="modal-heading"><h2>Edit profile</h2><button type="button" class="icon-button" data-close="profile-editor" aria-label="Close profile editor" data-icon="close"></button></div><div id="avatar-preview" class="avatar-preview"></div><div class="photo-actions"><button id="upload-avatar" type="button" class="secondary">Upload photo</button><button id="remove-avatar" type="button" class="text-button">Remove</button></div><input id="avatar-input" type="file" accept="image/*" hidden><small>Photos are cropped to 128 × 128. Username stays the same.</small><label for="profile-bio">A little about you</label><textarea id="profile-bio" maxlength="160" rows="2" placeholder="What's on your mind?"></textarea><fieldset><legend>Favourite accent</legend><div id="profile-colors" class="color-options"></div></fieldset><button type="submit" id="save-profile">Save profile</button></form></dialog>
   <dialog id="profile-card"><div class="modal-content"><div class="modal-heading"><h2>Profile</h2><button class="icon-button" data-close="profile-card" aria-label="Close profile" data-icon="close"></button></div><div id="profile-card-content"></div></div></dialog>
   <dialog id="member-list"><div class="modal-content"><div class="modal-heading"><h2>Group members</h2><button class="icon-button" data-close="member-list" aria-label="Close members" data-icon="close"></button></div><ul id="member-list-content"></ul></div></dialog>
