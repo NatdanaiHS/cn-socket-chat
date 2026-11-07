@@ -2,13 +2,13 @@
   color-scheme: light;
   --rail: #E3E5E8; --side: #F2F3F5; --chat: #FFFFFF; --input: #EBEDEF; --hover: #F2F3F5;
   --text: #060607; --muted: #4E5058; --border: #E1E2E4; --accent: #5865F2;
-  --online: #23A55A; --danger: #F23F43; --pill: #FFFFFF; --on-accent: #FFFFFF;
+  --online: #23A55A; --danger: #F23F43; --pill: #FFFFFF; --on-accent: #FFFFFF; --popover-shadow: 0 8px 24px #0003;
   --app-height: 100dvh; font: 400 16px/1.5 'IBM Plex Sans Thai', system-ui, sans-serif;
   color: var(--text); background: var(--chat);
 }
 [data-theme="dark"] {
   color-scheme: dark; --rail: #1E1F22; --side: #2B2D31; --chat: #313338; --input: #383A40; --hover: #2E3035;
-  --text: #F2F3F5; --muted: #B5BAC1; --border: #3F4147;
+  --text: #F2F3F5; --muted: #B5BAC1; --border: #3F4147; --popover-shadow: 0 8px 24px #0006;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--chat); }
@@ -144,7 +144,6 @@ ul { list-style: none; margin: 0; padding: 0; }
 .channel-list h2 { padding-top: 12px; padding-bottom: 8px; }
 .channel { width: 100%; background: transparent; color: var(--muted); justify-content: flex-start; padding: 8px; font-size: 16px; }
 .channel.selected,.channel:hover { background: var(--input); color: var(--text); }
-#side-summarize { font-size: 14px; }
 .user-panel { min-height: 52px; height: 52px; display: flex; align-items: center; gap: 4px; padding: 4px; background: var(--rail); flex-shrink: 0; }
 .user-copy { min-width: 0; flex: 1; display: grid; text-align: left; }
 .user-copy strong,.user-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -169,7 +168,7 @@ ul { list-style: none; margin: 0; padding: 0; }
 .room-heading { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
 .room-heading h1 { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .room-heading h1[role="button"] { cursor: pointer; }
-#room-kind { font-size: 12px; color: var(--muted); white-space: nowrap; }
+#room-kind { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #header-avatar { display: none; } #room-members { display: none; }
 .mobile-back { display: none; position: relative; } #back-unread { position: absolute; top: 0; right: 0; }
 .conversation-area { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }
@@ -226,7 +225,7 @@ button.read-receipt { min-height: 24px; padding: 0; background: transparent; }
 .typing-dots i:nth-child(2) { animation-delay: 150ms; } .typing-dots i:nth-child(3) { animation-delay: 300ms; }
 @keyframes typing { 50% { transform: translateY(-3px); } }
 .sending-state { padding: 4px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.emoji-picker { position: absolute; bottom: 100%; right: 8px; width: min(320px,calc(100% - 16px)); max-height: calc(var(--app-height) * .5); overflow-y: auto; display: grid; grid-template-columns: repeat(6,1fr); padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--side); z-index: 7; }
+.emoji-picker { position: absolute; bottom: 100%; right: 8px; width: min(320px,calc(100% - 16px)); max-height: var(--popup-height,240px); overflow-y: auto; overscroll-behavior: contain; display: grid; grid-template-columns: repeat(6,1fr); padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--side); z-index: 20; box-shadow: var(--popover-shadow); }
 .emoji-picker button { padding: 4px; font-size: 22px; background: transparent; }
 .new-messages { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); border-radius: 24px; z-index: 2; white-space: nowrap; }
 .drop-hint { position: absolute; inset: 16px; display: grid; place-content: center; background: var(--side); border: 2px dashed var(--accent); border-radius: 8px; text-align: center; pointer-events: none; z-index: 4; }
@@ -295,3 +294,42 @@ fieldset { border: 0; padding: 0; margin: 0; } legend { margin-bottom: 12px; }
 @media (prefers-reduced-motion: reduce) {
   *,*::before,*::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* Channels and message tools share the existing theme tokens. */
+.channel-heading,.channel-entry { display:flex; align-items:center; gap:4px; }
+.channel-heading h2 { flex:1; } .channel-entry .channel { min-width:0; overflow-wrap:anywhere; gap:8px; }
+.channel-delete { flex-shrink:0; color:var(--muted); }
+.composer-popup { position:absolute; top:auto; bottom:100%; left:8px; right:8px; z-index:20; max-height:var(--popup-height,240px); overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain; background:var(--side); border:1px solid var(--border); border-radius:8px; box-shadow:var(--popover-shadow); padding:4px; }
+.composer-popup button { display:flex; justify-content:flex-start; width:100%; text-align:left; background:transparent; color:var(--text); padding:8px; border-radius:4px; }
+.composer-popup button:hover,.composer-popup button.selected { background:var(--input); }
+#mention-popup .mention-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#mention-popup .avatar::after { width:10px; height:10px; border-width:2px; }
+#ai-menu { left:auto; width:260px; max-width:calc(100% - 16px); }
+.ai-menu-copy { display:grid; min-width:0; }
+.ai-menu-copy strong,.ai-menu-copy small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ai-menu-copy small { font-size:11px; font-weight:400; }
+#reply-bar { display:flex; align-items:center; gap:8px; padding:4px 8px; background:var(--side); border-left:3px solid var(--accent); }
+#reply-label { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mention { color:var(--text); background:color-mix(in srgb,var(--accent) 14%,var(--chat)); border-radius:4px; padding:0 2px; font-weight:600; }
+.mention-self { color:white; background:var(--accent); }
+.message-row.mentioned { background:color-mix(in srgb,var(--accent) 12%,var(--chat)); box-shadow:inset 3px 0 var(--accent); }
+.mention-badge { background:var(--accent); color:white; }
+.unsent { font-style:italic; color:var(--muted); }
+.reply-quote { display:flex; justify-content:flex-start; gap:6px; max-width:100%; padding:2px 0; color:var(--muted); background:transparent; font-size:12px; min-height:24px; }
+.reply-quote .icon { width:16px; height:16px; }
+.reply-excerpt { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.reply-sender { color:var(--accent); font-weight:600; }
+.message-row { position:relative; }
+.message-actions { position:absolute; right:12px; top:-16px; display:flex; gap:2px; padding:3px; z-index:3; background:var(--side); border:1px solid var(--border); border-radius:12px; box-shadow:var(--popover-shadow); visibility:hidden; }
+.message-actions button { min-width:32px; min-height:32px; background:transparent; color:var(--muted); padding:6px; border-radius:8px; }
+.message-actions button:hover { background:var(--input); color:var(--text); }
+.message-actions .danger-action,.message-actions .danger-action:hover { color:var(--danger); }
+.message-actions .icon { width:18px; height:18px; }
+.message-row:hover .message-actions,.message-row:focus-within .message-actions,.message-row.actions-open .message-actions { visibility:visible; }
+.message-more { display:none; background:transparent; color:var(--muted); align-self:flex-start; }
+.reply-flash { outline:2px solid var(--accent); outline-offset:-2px; }
+/* Overlay typing above the composer without changing message-list height. */
+.typing { position:absolute; bottom:100%; left:16px; right:16px; height:24px; border-radius:6px 6px 0 0; background:var(--side); opacity:0; transform:translateY(4px); transition:opacity .15s,transform .15s; pointer-events:none; }
+.typing.is-visible { opacity:1; transform:translateY(0); }
+@media (hover:none) { .message-more { display:flex; } .message-row:hover .message-actions { visibility:hidden; } .message-row:focus-within .message-actions,.message-row.actions-open .message-actions { visibility:visible; } .message-actions { top:0; right:48px; } .message-actions button { min-height:44px; } }
+@media (prefers-reduced-motion:reduce) { .typing { transition:none; } }

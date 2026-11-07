@@ -18,6 +18,8 @@ function icon(name) {
     more: ['M13 12a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z','M13 5a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z','M13 19a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z'],
     chat: ['M21 11.5a8.5 8.5 0 0 1-8.5 8.5H3l2-5a8.5 8.5 0 1 1 16-3.5Z','M8 10h8M8 14h5'],
     plus: ['M12 5v14M5 12h14'], close: ['m6 6 12 12M6 18 18 6'],
+    reply: ['m9 10-5 5 5 5','M4 15h10a6 6 0 0 0 0-12h-2'],
+    copy: ['M9 9h13v13H9Z','M5 15H2V2h13v3'],
     back: ['m15 18-6-6 6-6'], send: ['M12 19V5m-6 6 6-6 6 6'],
     attach: ['m21 11-8 8a6 6 0 0 1-8-8l9-9a4 4 0 0 1 6 6l-9 9a2 2 0 0 1-3-3l8-8'],
     smile: ['M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0ZM8 14s1 3 4 3 4-3 4-3M8 9h.01M16 9h.01'],
@@ -86,7 +88,7 @@ let bannerStartX = 0;
 $('message-banner').addEventListener('touchstart', e => { bannerStartX = e.changedTouches[0].clientX; }, { passive: true });
 $('message-banner').addEventListener('touchend', e => { if (Math.abs(e.changedTouches[0].clientX - bannerStartX) > 48) dismissBanner(); }, { passive: true });
 function announceMessage(message) {
-  const group = groups.find(g => g.roomId === message.roomId);
+  const group = groupFor(message.roomId);
   const title = group?.name || message.roomId.slice(3).split('|').find(n => n !== myName);
   const open = () => { dismissBanner(); void openRoom({ roomId: message.roomId }, title, group ? 'group' : 'private'); };
   const copy = element('span', 'banner-copy'); copy.append(element('strong', '', message.roomId.startsWith('group:') ? message.sender + ' · ' + message.roomId.slice(6) : message.sender), element('span', '', preview(message)));
@@ -100,6 +102,7 @@ function announceMessage(message) {
 function maintainViewport() {
   const follow = activeRoom && nearBottom();
   document.documentElement.style.setProperty('--app-height', (window.visualViewport?.height || window.innerHeight) + 'px');
+  positionComposerPopups();
   if (follow) requestAnimationFrame(scrollBottom);
 }
 window.visualViewport?.addEventListener('resize', maintainViewport);
@@ -118,6 +121,154 @@ let typingTimer, lastTypingSent = 0, sendingCount = 0;
 let draftAvatar = null, draftColor = colors[0], photoVersion = 0;
 
 let selectedGroupId = null;
+
+const mentionUnread = new Set();
+let replying = null, mentionOptions = [], mentionIndex = 0, mentionStart = -1;
+function groupFor(roomId) { return groups.find(g => g.roomId === roomId || g.channels?.some(c => c.roomId === roomId)); }
+function channelList(group) { return group.channels || [{ roomId: group.roomId, name: 'general' }]; }
+function channelName(roomId) { const group = groupFor(roomId); return group && channelList(group).find(c => c.roomId === roomId)?.name || 'general'; }
+function unreadBadge(roomId) { return element('span', 'badge' + (mentionUnread.has(roomId) ? ' mention-badge' : ''), (mentionUnread.has(roomId) ? '@ ' : '') + unread.get(roomId)); }
+function renderChannels(group) {
+  $('channels').replaceChildren();
+  if (!group) return;
+  for (const channel of channelList(group)) {
+    const row = element('div', 'channel-entry'), button = element('button', 'channel' + (activeRoom?.roomId === channel.roomId ? ' selected' : ''), '# ' + channel.name);
+    button.type = 'button'; button.onclick = () => void openRoom({ roomId: channel.roomId }, group.name, 'group');
+    if (unread.get(channel.roomId)) button.append(unreadBadge(channel.roomId)); row.append(button);
+    if (group.creator === myName && channel.roomId !== group.roomId) {
+      const remove = element('button', 'icon-button channel-delete', '×'); remove.type = 'button'; remove.setAttribute('aria-label', 'Delete channel ' + channel.name);
+      remove.onclick = () => void deleteChannel(channel.roomId); row.append(remove);
+    }
+    $('channels').append(row);
+  }
+}
+$('create-channel').onclick = () => { $('channel-error').textContent = ''; $('channel-input').value = ''; $('create-channel-sheet').dataset.groupId = selectedGroupId; $('create-channel-sheet').showModal(); };
+$('channel-form').onsubmit = async event => {
+  event.preventDefault(); $('channel-submit').disabled = true; $('channel-error').textContent = '';
+  const groupId = $('create-channel-sheet').dataset.groupId;
+  try {
+    const result = await request('channel_create', { groupId, name: $('channel-input').value });
+    $('create-channel-sheet').close(); await openRoom({ roomId: result.roomId }, groupFor(result.roomId)?.name || '', 'group');
+  } catch (error) { $('channel-error').textContent = error.message; }
+  finally { $('channel-submit').disabled = false; }
+};
+async function deleteChannel(roomId) {
+  if (!await confirmAction({ title: 'Delete channel?', body: 'Its messages and attachments will be deleted for everyone.', confirmLabel: 'Delete channel' })) return;
+  try { await request('channel_delete', { roomId }); } catch (error) { showError(error); }
+}
+function cancelReply() { replying = null; $('reply-bar').hidden = true; }
+$('cancel-reply').onclick = cancelReply;
+function startReply(message) { replying = message; $('reply-label').textContent = 'Replying to ' + message.sender; $('reply-bar').hidden = false; $('message-input').focus(); }
+function candidates(roomId) {
+  const group = groupFor(roomId);
+  const names = group ? group.members : [directRooms.find(r => r.roomId === roomId)?.target];
+  return [...new Set([...names, 'ai'])].filter(Boolean).sort((a, b) => b.length - a.length);
+}
+function mentionTokens(message) {
+  const text = message.text || '', names = [...new Set([...candidates(message.roomId), myName])].sort((a, b) => b.length - a.length), tokens = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '@' || (i && /[\p{L}\p{N}_@]/u.test(text[i - 1]))) continue;
+    const name = names.find(n => text.slice(i + 1, i + 1 + n.length).toLowerCase() === n.toLowerCase() && !/[\p{L}\p{N}_]/u.test(text[i + 1 + n.length] || ''));
+    if (name) { tokens.push({ start: i, end: i + 1 + name.length, name }); i += name.length; }
+  }
+  return tokens;
+}
+function mentionsMe(message) { return !message.deleted && mentionTokens(message).some(t => t.name.toLowerCase() === myName.toLowerCase()); }
+function renderMentionText(node, message) {
+  let start = 0;
+  for (const token of mentionTokens(message)) {
+    node.append(document.createTextNode(message.text.slice(start, token.start)), element('span', 'mention' + (token.name.toLowerCase() === myName.toLowerCase() ? ' mention-self' : ''), message.text.slice(token.start, token.end))); start = token.end;
+  }
+  node.append(document.createTextNode(message.text.slice(start)));
+}
+function closeMentions() { $('mention-popup').hidden = true; $('message-input').setAttribute('aria-expanded', 'false'); $('message-input').removeAttribute('aria-activedescendant'); }
+function closeComposerMenus() {
+  closeMentions(); $('ai-menu').hidden = true; $('ai-button').setAttribute('aria-expanded', 'false');
+  $('emoji-picker').hidden = true; $('emoji-button').setAttribute('aria-expanded', 'false');
+}
+function positionComposerPopups() {
+  const wrap = $('message-form').closest('.composer-wrap'), rect = wrap.getBoundingClientRect();
+  const available = Math.max(0, rect.top - (window.visualViewport?.offsetTop || 0) - 8);
+  wrap.style.setProperty('--popup-height', Math.min(240, available) + 'px');
+  const button = $('ai-button').getBoundingClientRect();
+  // Align with the AI button, while keeping the popover inside narrow composers.
+  $('ai-menu').style.right = Math.max(8, Math.min(rect.right - button.right, rect.width - 268)) + 'px';
+}
+function pickMention(index) {
+  const input = $('message-input'), name = mentionOptions[index]; if (!name) return;
+  input.setRangeText('@' + name + ' ', mentionStart, input.selectionStart, 'end'); closeMentions(); input.focus(); growComposer();
+}
+function paintMentionPopup() {
+  closeComposerMenus();
+  const popup = $('mention-popup'); popup.replaceChildren(); popup.hidden = !mentionOptions.length;
+  $('message-input').setAttribute('aria-expanded', String(!!mentionOptions.length));
+  mentionOptions.forEach((name, i) => {
+    const button = element('button', i === mentionIndex ? 'selected' : ''); button.type = 'button'; button.id = 'mention-option-' + i; button.tabIndex = -1;
+    button.setAttribute('aria-label', name === 'ai' ? 'AI assistant' : name + (users.includes(name) ? ', online' : ', offline'));
+    if (name === 'ai') { const bot = element('span', 'avatar small bot-avatar'); bot.append(icon('sparkles')); button.append(bot); }
+    else button.append(avatar(name, 'small', false));
+    button.append(element('span', 'mention-name', name === 'ai' ? 'AI assistant' : name));
+    button.setAttribute('role', 'option'); button.setAttribute('aria-selected', String(i === mentionIndex));
+    button.onmouseenter = () => selectMention(i);
+    button.onmousedown = e => e.preventDefault(); button.onclick = () => pickMention(i); popup.append(button);
+  });
+  if (mentionOptions.length) { positionComposerPopups(); selectMention(mentionIndex); }
+}
+function selectMention(index, scroll = false) {
+  mentionIndex = index;
+  const popup = $('mention-popup');
+  for (const [i, option] of [...popup.children].entries()) { option.classList.toggle('selected', i === index); option.setAttribute('aria-selected', String(i === index)); }
+  $('message-input').setAttribute('aria-activedescendant', 'mention-option-' + index);
+  const option = popup.children[index];
+  if (scroll && option) {
+    if (option.offsetTop < popup.scrollTop) popup.scrollTop = option.offsetTop;
+    else if (option.offsetTop + option.offsetHeight > popup.scrollTop + popup.clientHeight) popup.scrollTop = option.offsetTop + option.offsetHeight - popup.clientHeight;
+  }
+}
+function updateMentionPopup() {
+  const input = $('message-input'), before = input.value.slice(0, input.selectionStart), match = /(?:^|\s)@([^@\n]*)$/.exec(before);
+  if (!match || !activeRoom) return closeMentions();
+  mentionStart = before.lastIndexOf('@'); mentionOptions = candidates(activeRoom.roomId).filter(n => n.toLowerCase().startsWith(match[1].toLowerCase())); mentionIndex = 0; paintMentionPopup();
+}
+function mentionKey(event) {
+  if ($('mention-popup').hidden || event.isComposing) return false;
+  if (['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(event.key)) {
+    event.preventDefault();
+    if (event.key === 'Escape') closeMentions();
+    else if (event.key === 'Enter' || event.key === 'Tab') pickMention(mentionIndex);
+    else selectMention((mentionIndex + (event.key === 'ArrowDown' ? 1 : -1) + mentionOptions.length) % mentionOptions.length, true);
+    return true;
+  }
+  return false;
+}
+$('message-input').setAttribute('aria-controls', 'mention-popup'); $('message-input').setAttribute('aria-autocomplete', 'list');
+$('message-input').setAttribute('aria-haspopup', 'listbox'); $('message-input').setAttribute('aria-expanded', 'false');
+$('ai-button').onclick = () => { const open = $('ai-menu').hidden; closeComposerMenus(); $('ai-menu').hidden = !open; $('ai-button').setAttribute('aria-expanded', String(open)); if (open) { positionComposerPopups(); $('summarize').focus(); } };
+document.addEventListener('click', e => {
+  if ((!$('ai-menu').hidden && !e.target.closest('#ai-menu, #ai-button')) ||
+      (!$('mention-popup').hidden && !e.target.closest('#mention-popup, #message-input')) ||
+      (!$('emoji-picker').hidden && !e.target.closest('#emoji-picker, #emoji-button'))) closeComposerMenus();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') {
+  const returnTo = !$('ai-menu').hidden ? $('ai-button') : !$('emoji-picker').hidden ? $('emoji-button') : null;
+  cancelReply(); closeComposerMenus(); returnTo?.focus();
+} });
+function addMessageActions(row, message) {
+  if (message.deleted || message.kind === 'system') return;
+  row.tabIndex = 0; row.setAttribute('aria-label', 'Message from ' + message.sender);
+  const bar = element('div', 'message-actions'); bar.setAttribute('role', 'toolbar'); bar.setAttribute('aria-label', 'Message actions');
+  const action = (label, glyph, run) => { const button = element('button', label === 'Unsend' ? 'danger-action' : ''); button.type = 'button'; button.title = label; button.setAttribute('aria-label', label); button.append(icon(glyph)); button.onclick = () => { row.classList.remove('actions-open'); more.setAttribute('aria-expanded', 'false'); run(); }; bar.append(button); };
+  action('Reply', 'reply', () => startReply(message));
+  action('Copy text', 'copy', async () => { try { await navigator.clipboard.writeText(message.text || message.file?.name || ''); } catch { toast('Could not copy text.', true); } });
+  if (message.sender === myName && ['chat', 'file'].includes(message.kind)) action('Unsend', 'trash', async () => {
+    if (!await confirmAction({ title: 'Unsend message?', body: 'Everyone will see Message unsent.', confirmLabel: 'Unsend' })) return;
+    try { await request('message_unsend', { roomId: message.roomId, messageId: message.id }); } catch (error) { showError(error); }
+  });
+  const more = element('button', 'message-more icon-button', '⋯'); more.type = 'button'; more.setAttribute('aria-label', 'Message actions'); more.setAttribute('aria-expanded', 'false');
+  more.onclick = () => { const open = row.classList.toggle('actions-open'); more.setAttribute('aria-expanded', String(open)); if (open) bar.querySelector('button').focus(); };
+  row.append(bar, more);
+}
+
 let contextVisible = matchMedia('(min-width: 1024px)').matches;
 function setContext(visible) {
   contextVisible = visible; renderContext();
@@ -131,15 +282,15 @@ function renderNavigation() {
   $('home-button').setAttribute('aria-current', group ? 'false' : 'page');
   $('home-button').setAttribute('aria-label', 'WongChat Home' + (dmUnread ? ', ' + dmUnread + ' unread' : ''));
   $('home-button').querySelector('.badge')?.remove();
-  if (dmUnread) $('home-button').append(element('span', 'badge', dmUnread > 99 ? '99+' : String(dmUnread)));
+  if (dmUnread) $('home-button').append(element('span', 'badge' + (directRooms.some(r => mentionUnread.has(r.roomId)) ? ' mention-badge' : ''), (directRooms.some(r => mentionUnread.has(r.roomId)) ? '@ ' : '') + (dmUnread > 99 ? '99+' : String(dmUnread))));
   $('joined-groups').replaceChildren();
   for (const g of groups.filter(g => g.members.includes(myName))) {
-    const count = unread.get(g.roomId) || 0, button = element('button', 'rail-icon' + (group?.roomId === g.roomId ? ' selected' : '') + (count ? ' has-unread' : ''));
+    const count = channelList(g).reduce((sum, c) => sum + (unread.get(c.roomId) || 0), 0), button = element('button', 'rail-icon' + (group?.roomId === g.roomId ? ' selected' : '') + (count ? ' has-unread' : ''));
     button.type = 'button'; button.setAttribute('aria-current', group?.roomId === g.roomId ? 'page' : 'false'); button.style.setProperty('--group-color', defaultColor(g.name));
     button.setAttribute('aria-label', g.name + (count ? ', ' + count + ' unread' : '')); button.title = g.name;
     button.append(element('span', '', g.name.trim().split(/\s+/).slice(0, 2).map(n => [...n][0]).join('').toUpperCase()));
     button.append(element('span', 'rail-tooltip', g.name));
-    if (count) button.append(element('span', 'badge', count > 99 ? '99+' : String(count)));
+    if (count) { const badge = element('span', 'badge', count > 99 ? '99+' : String(count)); if (channelList(g).some(c => mentionUnread.has(c.roomId))) { badge.classList.add('mention-badge'); badge.textContent = '@ ' + count; } button.append(badge); }
     button.onclick = () => {
       $('group-menu').hidden = true; $('group-menu-button').setAttribute('aria-expanded', 'false'); selectedGroupId = g.roomId;
       if (matchMedia('(max-width: 767px)').matches) { clearRoom(); renderLists(); }
@@ -148,6 +299,7 @@ function renderNavigation() {
     $('joined-groups').append(button);
   }
   if (group) $('selected-group-name').textContent = group.name;
+  renderChannels(group);
 }
 function renderContext() {
   const available = !!activeRoom;
@@ -167,7 +319,7 @@ function renderContext() {
     content.append(banner, details); return;
   }
   $('context-title').textContent = 'Members';
-  const group = groups.find(g => g.roomId === activeRoom.roomId); if (!group) return;
+  const group = groupFor(activeRoom.roomId); if (!group) return;
   for (const online of [true, false]) {
     const names = group.members.filter(n => users.includes(n) === online);
     content.append(element('h3', '', (online ? 'ONLINE — ' : 'OFFLINE — ') + names.length));
@@ -191,7 +343,7 @@ $('members-toggle').onclick = () => setContext(!contextVisible);
 $('close-context').onclick = $('drawer-backdrop').onclick = () => setContext(false);
 // One menu builder for the sidebar group menu and the chat header "⋮" menu; the server re-checks every permission.
 function menuItems(roomId) {
-  const group = groups.find(g => g.roomId === roomId && g.members.includes(myName));
+  const group = groupFor(roomId);
   if (!group) {
     const room = directRooms.find(r => r.roomId === roomId); if (!room) return [];
     return [
@@ -199,6 +351,10 @@ function menuItems(roomId) {
       { label: 'Clear chat for me', icon: 'eraser', run: () => clearChat(roomId, room.target, 'me') }
     ];
   }
+  if (roomId !== group.roomId) return [
+    { label: 'Clear chat for me', icon: 'eraser', run: () => clearChat(roomId, channelName(roomId), 'me') },
+    ...(group.creator === myName ? [{ label: 'Delete channel', icon: 'trash', danger: true, run: () => deleteChannel(roomId) }] : [])
+  ];
   const items = [
     { label: 'Members', icon: 'users', run: () => { if (activeRoom?.roomId === roomId) setContext(true); else { selectedGroupId = roomId; renderMembers(); $('member-list').showModal(); } } },
     { label: 'Clear chat for me', icon: 'eraser', run: () => clearChat(roomId, group.name, 'me') }
@@ -269,8 +425,7 @@ async function deleteGroup(group) {
   try { await request('group_delete', { roomId: group.roomId }); toast('Deleted ' + group.name); }
   catch (error) { showError(error); }
 }
-$('general-channel').onclick = () => { const g = groups.find(g => g.roomId === selectedGroupId); if (g) void openRoom({ roomId: g.roomId }, g.name, 'group'); };
-$('side-summarize').onclick = () => { if (!$('summarize').disabled) $('summarize').click(); };
+
 const wideLayout = matchMedia('(min-width: 1024px)');
 wideLayout.addEventListener('change', () => setContext(wideLayout.matches));
 window.addEventListener('resize', renderContext);
@@ -401,6 +556,7 @@ function relativeTime(time) {
 }
 function preview(message) {
   if (!message) return '';
+  if (message.deleted) return 'Message unsent';
   return (message.sender === myName && message.kind !== 'system' ? 'You: ' : '') + (message.kind === 'file' ? (isImage(message.file) ? 'Photo' : 'File: ' + message.file.name) : message.text);
 }
 function isImage(file) { return ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file?.type); }
@@ -420,7 +576,7 @@ function makeRow(name, roomId, open, fallback, group = false) {
   copy.append(top, element('span', 'row-preview' + (typing ? ' is-typing' : ''), typing ? 'typing…' : preview(last) || fallback));
   if (!typing) photoIcon(copy.lastChild, last);
   button.append(copy); button.onclick = open;
-  if (unread.get(roomId)) button.append(element('span', 'badge', String(unread.get(roomId))));
+  if (unread.get(roomId)) button.append(unreadBadge(roomId));
   li.append(button);
   return li;
 }
@@ -432,8 +588,8 @@ function renderHeader() {
     $('room-title').textContent = 'A little closer, in real time.';
     $('room-kind').textContent = 'YOUR CONVERSATIONS'; $('room-title').onclick = null; $('room-title').removeAttribute('tabindex'); $('room-title').removeAttribute('role'); return;
   }
-  $('room-title').textContent = activeRoom.kind === 'group' ? '# general · ' + activeRoom.title : '@ ' + activeRoom.title;
-  $('message-input').placeholder = activeRoom.kind === 'group' ? 'Message #general' : 'Message @' + activeRoom.title;
+  $('room-title').textContent = activeRoom.kind === 'group' ? '# ' + channelName(activeRoom.roomId) : '@ ' + activeRoom.title;
+  $('message-input').placeholder = activeRoom.kind === 'group' ? 'Message #' + channelName(activeRoom.roomId) : 'Message @' + activeRoom.title;
   if (activeRoom.kind === 'private') {
     $('header-avatar').append(avatar(activeRoom.title));
     $('room-kind').textContent = users.includes(activeRoom.title) ? 'online' : 'offline';
@@ -441,8 +597,8 @@ function renderHeader() {
     $('room-title').tabIndex = 0; $('room-title').setAttribute('role', 'button');
   } else {
     const groupAvatar = element('span', 'avatar'); groupAvatar.append(icon('users')); $('header-avatar').append(groupAvatar);
-    const group = groups.find(g => g.roomId === activeRoom.roomId);
-    $('room-kind').textContent = memberCount(group?.members.length || 0);
+    const group = groupFor(activeRoom.roomId);
+    $('room-kind').textContent = (group?.name || '') + ' \u00b7 ' + memberCount(group?.members.length || 0);
     $('room-members').textContent = memberCount(group?.members.length || 0);
     $('room-members').setAttribute('aria-label', 'View group members');
     $('room-title').onclick = null; $('room-title').removeAttribute('tabindex'); $('room-title').removeAttribute('role');
@@ -484,16 +640,15 @@ function setComposer(enabled) {
   for (const id of ['message-input', 'send-button', 'summarize', 'attach-button', 'emoji-button', 'ai-button', 'room-menu-button']) $(id).disabled = !enabled;
 }
 function clearRoom() {
-  stopTyping(); openingVersion++; activeRoom = null; firstUnreadId = null;
+  cancelReply(); closeComposerMenus(); stopTyping(); openingVersion++; activeRoom = null; firstUnreadId = null;
   if (!wideLayout.matches) contextVisible = false;
   $('messages').removeAttribute('aria-busy');
   setComposer(false); $('chat-app').classList.remove('room-open'); syncScreens();
-  $('emoji-picker').hidden = true; $('emoji-button').setAttribute('aria-expanded', 'false');
   $('new-messages').hidden = true;
   renderHeader(); renderNavigation(); renderContext(); renderMessages(true);
 }
 async function openRoom(payload, title, kind) {
-  stopTyping(); firstUnreadId = null; const version = ++openingVersion;
+  cancelReply(); closeComposerMenus(); stopTyping(); firstUnreadId = null; const version = ++openingVersion;
   const requestedId = payload.roomId || dmId(payload.target);
   const unreadCount = unread.get(requestedId) || 0;
   activeRoom = null; setComposer(false);
@@ -506,11 +661,11 @@ async function openRoom(payload, title, kind) {
     const result = await request('room_open', { ...payload, read: document.visibilityState === 'visible' });
     if (version !== openingVersion) return;
     activeRoom = { roomId: result.roomId, title, kind };
-    selectedGroupId = kind === 'group' ? result.roomId : null;
+    selectedGroupId = kind === 'group' ? groupFor(result.roomId)?.roomId : null;
     const combined = new Map(result.messages.map(message => [message.id, message]));
     // Keep echoes received while the room history was in flight.
     for (const message of histories.get(result.roomId) || []) {
-      if (!result.messages.length || message.time >= result.messages[0].time) combined.set(message.id, message);
+      if (!combined.has(message.id) && (!result.messages.length || message.time >= result.messages[0].time)) combined.set(message.id, message);
     }
     const messages = [...combined.values()].sort((a, b) => a.time.localeCompare(b.time)).slice(-200);
     histories.set(result.roomId, messages);
@@ -535,7 +690,7 @@ $('new-messages').onclick = scrollBottom;
 function markOpenRead() {
   if (!activeRoom || document.visibilityState !== 'visible') return;
   const roomId = activeRoom.roomId, messageId = histories.get(roomId)?.at(-1)?.id;
-  unread.delete(roomId);
+  unread.delete(roomId); mentionUnread.delete(roomId);
   if (messageId) socket.emit('room_read', { roomId, messageId });
 }
 $('messages').onscroll = () => { if (nearBottom()) { $('new-messages').hidden = true; markOpenRead(); updateTitle(); } };
@@ -581,7 +736,21 @@ function renderMessages(forceBottom = false) {
         if (!ai) { name.type = 'button'; name.onclick = () => showProfile(message.sender); }
         heading.append(name); if (ai) heading.append(element('span', 'ai-chip', 'AI')); heading.append(time); stack.append(heading);
       }
-      if (message.kind === 'file') article.append(fileContent(message)); else article.append(element('p', 'message-text', message.text));
+      if (message.reply) {
+        const quote = element('button', 'reply-quote'), excerpt = element('span', 'reply-excerpt');
+        quote.append(icon('reply'), excerpt);
+        if (message.reply.deleted) excerpt.textContent = 'Original message was unsent';
+        else excerpt.append(element('strong', 'reply-sender', message.reply.sender), document.createTextNode(': ' + message.reply.text));
+        quote.type = 'button'; quote.onclick = () => {
+          const original = [...$('messages').querySelectorAll('[data-message-id]')].find(n => n.dataset.messageId === message.reply.id);
+          if (original) { original.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' }); original.classList.add('reply-flash'); setTimeout(() => original.classList.remove('reply-flash'), 1400); }
+        }; stack.append(quote);
+      }
+      if (message.deleted) article.append(element('p', 'unsent', 'Message unsent'));
+      else if (message.kind === 'file') article.append(fileContent(message));
+      else { const text = element('p', 'message-text'); renderMentionText(text, message); article.append(text); }
+      if (!message.deleted && mentionsMe(message)) row.classList.add('mentioned');
+      if (message.id) { row.dataset.messageId = message.id; addMessageActions(row, message); }
       stack.append(article);
       if (own) { row.dataset.messageId = message.id; stack.dataset.ownMessage = message.id; }
       row.append(stack);
@@ -593,17 +762,17 @@ function renderMessages(forceBottom = false) {
 }
 function fileSize(size) { return size < 1024 ? size + ' B' : size < 1024 * 1024 ? (size / 1024).toFixed(1) + ' KB' : (size / (1024 * 1024)).toFixed(1) + ' MB'; }
 function roomAllowed(roomId) {
-  return myName && (groups.some(g => g.roomId === roomId && g.members.includes(myName)) || directRooms.some(r => r.roomId === roomId));
+  return myName && (!!groupFor(roomId)?.members.includes(myName) || directRooms.some(r => r.roomId === roomId));
 }
 async function fileURL(roomId, file) {
   const key = roomId + '/' + file.id;
   if (fileURLs.has(key)) return fileURLs.get(key);
   const version = accountVersion;
   const pending = request('file_get', { roomId, fileId: file.id }).then(result => {
-    if (version !== accountVersion || !roomAllowed(roomId)) throw new Error('This conversation is no longer available.');
+    if (version !== accountVersion || !roomAllowed(roomId) || fileURLs.get(key) !== pending) throw new Error('This attachment is no longer available.');
     const url = URL.createObjectURL(new Blob([result.data], { type: result.file.type }));
     fileURLs.set(key, url); return url;
-  }).catch(error => { fileURLs.delete(key); throw error; });
+  }).catch(error => { if (fileURLs.get(key) === pending) fileURLs.delete(key); throw error; });
   fileURLs.set(key, pending); return pending;
 }
 function forgetFiles(roomId) {
@@ -701,7 +870,7 @@ async function sendFile(file) {
   if (!activeRoom) return toast('Choose a conversation before sharing a file.', true);
   if (file.size > 5 * 1024 * 1024 && !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return toast('That file is too large. The maximum size is 5 MB.', true);
   stopTyping();
-  const roomId = activeRoom.roomId, version = accountVersion;
+  const roomId = activeRoom.roomId, version = accountVersion, replyTo = replying?.id;
   sendingCount++; $('sending-state').hidden = false; $('sending-state').textContent = 'Sending… ' + file.name;
   try {
     $('sending-state').textContent = isImage(file) && file.type !== 'image/gif' ? 'Preparing photo…' : 'Sending… ' + file.name;
@@ -711,7 +880,8 @@ async function sendFile(file) {
     $('sending-state').textContent = 'Sending… ' + file.name;
     const data = await file.arrayBuffer();
     if (version !== accountVersion) return;
-    await request('file_send', { roomId, name: file.name, type: file.type || 'application/octet-stream', data, width: prepared.width, height: prepared.height });
+    await request('file_send', { roomId, name: file.name, type: file.type || 'application/octet-stream', data, width: prepared.width, height: prepared.height, replyTo });
+    if (replying?.id === replyTo) cancelReply();
   } catch (error) { if (version === accountVersion) showError(error); }
   finally { sendingCount = Math.max(0, sendingCount - 1); $('sending-state').hidden = !sendingCount; }
 }
@@ -742,7 +912,7 @@ function renderTyping() {
   const names = typingNames(activeRoom?.roomId), signature = JSON.stringify(names);
   if (signature !== typingSignature) {
     typingSignature = signature;
-    $('typing-text').textContent = names.length ? names.join(', ') + (names.length === 1 ? ' is typing…' : ' are typing…') : '';
+    $('typing-text').textContent = names.length >= 4 ? 'Several people are typing\u2026' : names.length === 3 ? names[0] + ', ' + names[1] + ' and ' + names[2] + ' are typing\u2026' : names.length === 2 ? names.join(' and ') + ' are typing\u2026' : names.length === 1 ? names[0] + ' is typing\u2026' : '';
     $('typing-indicator').classList.toggle('is-visible', names.length > 0);
   }
   if (nextExpiry < Infinity) typingExpiryTimer = setTimeout(() => { renderTyping(); renderLists(); }, Math.max(1, nextExpiry - Date.now()));
@@ -751,12 +921,14 @@ function stopTyping() {
   clearTimeout(typingTimer); lastTypingSent = 0;
   if (activeRoom && socket.connected) socket.emit('typing', { roomId: activeRoom.roomId, typing: false });
 }
-function growComposer() { const input = $('message-input'); input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 140) + 'px'; }
+function growComposer() { const input = $('message-input'); input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 140) + 'px'; positionComposerPopups(); }
 $('message-input').onkeydown = event => {
+  if (mentionKey(event)) return;
+  if (event.key === 'Escape') { cancelReply(); closeComposerMenus(); return; }
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); $('message-form').requestSubmit(); }
 };
 $('message-input').oninput = () => {
-  growComposer(); if (!activeRoom) return;
+  growComposer(); updateMentionPopup(); if (!activeRoom) return;
   if (!$('message-input').value.trim()) return stopTyping();
   if (!lastTypingSent || Date.now() - lastTypingSent >= 2000) { socket.emit('typing', { roomId: activeRoom.roomId, typing: true }); lastTypingSent = Date.now(); }
   clearTimeout(typingTimer); typingTimer = setTimeout(stopTyping, 3000);
@@ -771,14 +943,13 @@ for (const emoji of emojis) {
     input.dispatchEvent(new Event('input')); input.focus();
   }; $('emoji-picker').append(button);
 }
-$('emoji-button').onclick = () => { $('emoji-picker').hidden = !$('emoji-picker').hidden; $('emoji-button').setAttribute('aria-expanded', String(!$('emoji-picker').hidden)); };
-document.addEventListener('click', event => { if (!$('emoji-picker').contains(event.target) && !$('emoji-button').contains(event.target)) { $('emoji-picker').hidden = true; $('emoji-button').setAttribute('aria-expanded', 'false'); } });
-document.addEventListener('keydown', event => { if (event.key === 'Escape') { $('emoji-picker').hidden = true; $('emoji-button').setAttribute('aria-expanded', 'false'); } });
+$('emoji-button').onclick = () => { const open = $('emoji-picker').hidden; closeComposerMenus(); $('emoji-picker').hidden = !open; $('emoji-button').setAttribute('aria-expanded', String(open)); if (open) positionComposerPopups(); };
 $('message-form').onsubmit = async event => {
   event.preventDefault(); if (!activeRoom || !$('message-input').value.trim()) return;
-  const roomId = activeRoom.roomId, version = accountVersion, text = $('message-input').value;
+  const roomId = activeRoom.roomId, version = accountVersion, text = $('message-input').value, replyTo = replying?.id;
   $('message-input').value = ''; growComposer(); stopTyping();
-  try { await request('message_send', { roomId, text }); }
+  cancelReply(); closeComposerMenus();
+  try { await request('message_send', { roomId, text, replyTo }); }
   catch (error) {
     if (version !== accountVersion) return;
     if (activeRoom?.roomId === roomId && !$('message-input').value) { $('message-input').value = text; growComposer(); }
@@ -801,13 +972,13 @@ function signedIn(result) {
   accountVersion++; sessionToken = result.token; storeToken(sessionToken);
   myName = result.name; users = result.users; groups = result.groups; directRooms = result.directRooms; profiles = result.profiles;
   unread.clear(); for (const [id, count] of Object.entries(result.unread)) unread.set(id, count);
-  lastMessages.clear(); for (const [id, message] of Object.entries(result.lastMessages || {})) lastMessages.set(id, message);
+  lastMessages.clear(); for (const [id, message] of Object.entries(result.lastMessages || {})) { lastMessages.set(id, message); if (unread.get(id) && mentionsMe(message)) mentionUnread.add(id); }
   $('password-input').value = $('confirm-input').value = ''; $('password-input').type = 'password'; $('password-toggle').setAttribute('aria-label', 'Show password'); $('password-toggle').setAttribute('aria-pressed', 'false');
   document.body.classList.add('chatting');
   $('login-screen').hidden = true; $('chat-app').hidden = false; updateIdentity(); renderLists(); renderMessages(true);
 }
 function signedOut(message) {
-  accountVersion++; clearRoom(); forgetFiles();
+  mentionUnread.clear(); accountVersion++; clearRoom(); forgetFiles();
   dismissBanner(); clearTimeout(typingExpiryTimer); typingSignature = ''; $('typing-text').textContent = ''; $('typing-indicator').classList.remove('is-visible');
   if (history.state?.wongchat === 'room') history.replaceState({ wongchat: 'list' }, '');
   selectedGroupId = null; myName = ''; users = []; groups = []; directRooms = []; profiles = {};
@@ -846,6 +1017,7 @@ $('group-form').onsubmit = async event => {
   finally { button.disabled = false; }
 };
 $('summarize').onclick = async () => {
+  closeComposerMenus();
   if (!activeRoom) return; const roomId = activeRoom.roomId, version = accountVersion; $('summarize').disabled = true;
   try {
     const result = await request('ai_summarize', { roomId });
@@ -923,11 +1095,11 @@ socket.on('profiles_update', list => { profiles = list; if (!myName) return; upd
 socket.on('groups_update', list => {
   groups = list;
   if (selectedGroupId && !groups.some(g => g.roomId === selectedGroupId && g.members.includes(myName))) selectedGroupId = null;
-  if (activeRoom?.kind === 'group' && !groups.some(g => g.roomId === activeRoom.roomId && g.members.includes(myName))) clearRoom();
+  if (activeRoom?.kind === 'group' && !groupFor(activeRoom.roomId)?.members.includes(myName)) clearRoom();
   const cached = new Set([...histories.keys(), ...unread.keys(), ...lastMessages.keys()]);
   for (const id of cached) {
-    if (id.startsWith('group:') && !groups.some(g => g.roomId === id && g.members.includes(myName))) {
-      readStates.delete(id); histories.delete(id); summaries.delete(id); unread.delete(id); typers.delete(id); lastMessages.delete(id); forgetFiles(id);
+    if ((id.startsWith('group:') || id.startsWith('channel:')) && !groupFor(id)?.members.includes(myName)) {
+      readStates.delete(id); histories.delete(id); summaries.delete(id); unread.delete(id); typers.delete(id); lastMessages.delete(id); mentionUnread.delete(id); forgetFiles(id);
     }
   }
   renderLists(); if ($('member-list').open) renderMembers();
@@ -943,6 +1115,7 @@ socket.on('message_new', message => {
     const wasNearBottom = nearBottom(); markOpenRead();
     renderMessages(); if (!wasNearBottom) $('new-messages').hidden = false;
   } else if (message.sender !== myName) {
+    if (mentionsMe(message)) mentionUnread.add(message.roomId);
     unread.set(message.roomId, (unread.get(message.roomId) || 0) + 1);
     if (message.sender !== myName) announceMessage(message);
   }
@@ -995,7 +1168,8 @@ function syncScreens() {
 }
 window.addEventListener('resize', syncScreens); syncScreens();
 // The AI button starts the message with "@ai " so users discover the AI command.
-$('ai-button').onclick = () => {
+$('ask-ai').onclick = () => {
+  closeComposerMenus();
   const input = $('message-input');
   if (!/^@ai\b/i.test(input.value)) input.value = '@ai ' + input.value.trimStart();
   input.focus(); input.setSelectionRange(input.value.length, input.value.length); input.dispatchEvent(new Event('input'));
@@ -1004,7 +1178,7 @@ function memberCount(count) { return count + (count === 1 ? ' member' : ' member
 
 function readersFor(message) {
   const messages = histories.get(message.roomId) || [], index = messages.findIndex(m => m.id === message.id);
-  const members = groups.find(g => g.roomId === message.roomId)?.members || message.roomId.slice(3).split('|');
+  const members = groupFor(message.roomId)?.members || message.roomId.slice(3).split('|');
   return members.filter(name => name !== myName && messages.findIndex(m => m.id === readStates.get(message.roomId)?.[name]) >= index);
 }
 function renderReadSheet() {
@@ -1027,7 +1201,7 @@ function renderReceipts() {
     if (!message) continue;
     const readers = readersFor(message);
     if (activeRoom.kind === 'group') {
-      if (message !== latest) continue;
+      if (message !== latest || !readers.length) continue;
       const receipt = element('button', 'read-receipt', 'Read by ' + readers.length); receipt.type = 'button';
       receipt.onclick = () => {
         $('read-sheet').dataset.roomId = message.roomId; $('read-sheet').dataset.messageId = message.id;
@@ -1061,4 +1235,19 @@ socket.on('group_deleted', ({ roomId, name, by }) => {
 socket.on('room_cleared', ({ roomId, by }) => {
   wipeLocalRoom(roomId);
   if (by !== myName && activeRoom?.roomId === roomId) toast(by + ' cleared this chat');
+});
+
+// Updates are private and never count as new unread messages.
+socket.on('message_update', message => {
+  if (!roomAllowed(message.roomId)) return;
+  const messages = histories.get(message.roomId) || [], index = messages.findIndex(m => m.id === message.id);
+  if (index >= 0) messages[index] = message;
+  if (lastMessages.get(message.roomId)?.id === message.id) lastMessages.set(message.roomId, message);
+  if (message.deleted) {
+    forgetFiles(message.roomId);
+    if (replying?.id === message.id) cancelReply();
+    for (const cached of messages) if (cached.reply?.id === message.id) cached.reply = { ...cached.reply, text: '', deleted: true };
+    if (!messages.some(mentionsMe)) mentionUnread.delete(message.roomId);
+  }
+  if (activeRoom?.roomId === message.roomId) renderMessages(); renderLists();
 });

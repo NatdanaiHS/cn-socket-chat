@@ -23,10 +23,10 @@ Every request except register, login and resume requires an authenticated socket
 | read_update | S → C | { roomId, username, messageId }. Sent only when a pointer advances, through the same private delivery path as messages: DM participants or current group members. |
 | group_create | C → S | { name }; ack { ok, roomId }. Trimmed, unique case-insensitively, 1–60 Unicode characters, no control characters. Saves creator username; joins only creator. Other fields cannot add members. |
 | group_join | C → S | { roomId }; ack { ok, roomId }. Adds requesting username and subscribes its socket. A new membership saves and delivers a kind=system join notice to members including the joiner; repeat join is idempotent. No target/member field is accepted. |
-| group_leave | C → S | { roomId }; ack { ok, roomId }. Removes requesting username and socket subscription; clears unread count. Only the final member leaving deletes a group, its history and all its files from disk and registry. A leave notice is delivered after removal to remaining members. |
-| message_send | C → S | { roomId, text }; ack { ok }. Trimmed text, 1–4000 UTF-16 code units. Validates access; offline DM recipients are allowed. Group messages starting with "@ai " also request an AI answer. |
+| group_leave | C → S | { roomId }; ack { ok, roomId }. Removes requesting username and socket subscription; clears unread count. Only the final member leaving deletes a group and every channel, history, read state and file from disk and registry. A leave notice is delivered after removal to remaining members. |
+| message_send | C → S | { roomId, text, replyTo?: messageId }; ack { ok }. Trimmed text, 1–4000 UTF-16 code units. Validates access; offline DM recipients are allowed. Messages starting with "@ai " (case-insensitive) request an AI answer in DMs, #general and extra channels. Bare @ai returns usage help. |
 | message_new | S → C | Message. DMs go only to connected participant sockets; group messages only to subscribed members. Saved before delivery, including when recipients are offline. AI group replies use sender "AI Bot" and kind "ai". File and system messages use the same private delivery path. |
-| file_send | C → S | { roomId, name, type, data: ArrayBuffer, width?: integer, height?: integer }; ack { ok, message: Message }. Authenticated room members/DM participants only. Binary bytes up to 5 × 1024 × 1024, including empty files; invalid binary, name or access is rejected. Names lose path separators, control/reserved characters and trailing dots/spaces, capped at 180 characters. MIME defaults to application/octet-stream. Optional dimensions must be supplied together as positive integers up to 10000. Saves dimensions with metadata and UUID-named bytes privately, then delivers kind=file using message_new. |
+| file_send | C → S | { roomId, name, type, data: ArrayBuffer, width?: integer, height?: integer, replyTo?: messageId }; ack { ok, message: Message }. Authenticated room members/DM participants only. Binary bytes up to 5 × 1024 × 1024, including empty files; invalid binary, name or access is rejected. Names lose path separators, control/reserved characters and trailing dots/spaces, capped at 180 characters. MIME defaults to application/octet-stream. Optional dimensions must be supplied together as positive integers up to 10000. Saves dimensions with metadata and UUID-named bytes privately, then delivers kind=file using message_new. |
 | file_get | C → S | { roomId, fileId }; ack { ok, file: File, data: binary }. Checks room access and the file registry owning room. Unknown, cross-room and missing files are rejected. No public upload URL exists. |
 | profile_update | C → S | { avatar: null or JPEG data URL, bio: string, color: preset }; ack { ok, profile }. Bio at most 80 Unicode characters (trimmed). Avatar must start with data:image/jpeg;base64, contain canonical base64 with JPEG start/end markers, and the complete data URL must be at most 60 × 1024 UTF-8 bytes. Other MIME types are rejected. Username is never changed. |
 | profiles_update | S → C | { [username]: { avatar, bio, color } }. Public profiles of all registered accounts; sent only to logged-in sockets after authentication and profile edits. Never contains passwords, tokens or unread counts. |
@@ -42,10 +42,10 @@ Only this account's DM metadata, unread counts and accessible room previews are 
 Public group metadata never contains message previews for non-members.
 
 Group = { roomId: string, name: string, creator: string, members: string[],
-onlineMembers: string[] }. Members includes offline users; onlineMembers is a subset.
+onlineMembers: string[], channels?: { roomId, name }[] }. Members includes offline users; onlineMembers is a subset.
 
 Message = { id: UUID string, roomId: string, sender: string, text: string,
-time: ISO-8601 string, kind: "chat" | "ai" | "file" | "system", file?: File }.
+time: ISO-8601 string, kind: "chat" | "ai" | "file" | "system", file?: File, deleted?: boolean, reply?: { id, sender, text, kind, deleted?: boolean } }.
 File = { id: UUID string, name: string, type: MIME string, size: bytes, width?: integer, height?: integer }.
 File messages use empty text and metadata only; system notices use text and a human sender.
 Profile = { avatar: null | JPEG data URL, bio: string, color: preset }.
@@ -85,8 +85,8 @@ The server echoes own messages, avoiding duplicate optimistic messages. Typing a
 local AI summaries are transient, and summaries are visible only to their requester.
 
 Gemini uses global fetch, an x-goog-api-key header and a 20-second timeout.
-Group AI replies arrive separately after human-message acknowledgement. The server
-checks that the original group still exists before delivery. Summary access and
+Room AI replies arrive separately after human-message acknowledgement. The server
+checks that the original group/channel/DM still exists before delivery. Summary access and
 room identity are checked again after awaiting Gemini.
 
 ## Attachments and browser preferences
@@ -108,3 +108,49 @@ chat data over HTTP. System mode follows prefers-color-scheme live. Typing, loca
 AI summaries and Blob URLs are transient.
 
 Photo uploads include oriented width/height. JPEG, PNG and WebP over 400 KB or 2048 px are oriented using createImageBitmap with from-image, scaled to at most 2048 px, and encoded as JPEG quality 0.85. Transparent PNG stays PNG only when the encoded result is at most 1.5 MB. GIF bytes are unchanged. The final upload still obeys the 5 MB limit. Image previews reserve metadata dimensions and use private file_get bytes; lightbox and downloads use Blob URLs.
+
+## Text channels, replies and unsend (v9)
+
+All requests below require authentication and server-side room access. Errors use
+`{ ok: false, error }`. All data still travels over Socket.IO.
+
+| Event | Direction | Payload / success acknowledgement |
+| --- | --- | --- |
+| channel_create | C to S | `{ groupId, name }` -> `{ ok, roomId }`. Any current parent-group member may create. Trim and lowercase, replace runs of spaces with `-`; 1-30 Unicode letters/digits, `_` or `-`. Names are unique per group; `general` is reserved. |
+| channel_delete | C to S | `{ roomId }` -> `{ ok }`. Only the parent-group creator may delete a non-general channel. Removes history, readState, all accounts' unread/clear pointers and attachment files (registry and disk); unsubscribes sockets and refreshes groups_update. |
+| message_unsend | C to S | `{ roomId, messageId }` -> `{ ok }`. Original sender only, retained `chat` or `file` messages, no time limit. Repeated unsend is idempotent. Keeps id/sender/time/kind, sets `deleted: true`, empties text and removes file metadata, bytes and registry entry. |
+| message_update | S to C | Updated `Message`, delivered only to DM participants or current group/channel members. Sent for the unsent message and each affected reply snapshot; does not increment unread or create another message. |
+
+The original `group:<name>` room is #general, with unchanged history and ids.
+Extra channels use `channel:<uuid>`. JSON adds optional `channels` entries
+`[roomId, { roomId, groupId, name, creator, createdAt }]`; createdAt is ISO-8601.
+Old files without channels, reply or deleted fields load unchanged.
+
+`groups_update` and AuthResult.groups retain their original public group fields.
+Only members receive `channels: [{ roomId, name }]`, including #general, on each
+group. Lists are emitted per authenticated socket; non-members never receive
+channel names or previews. Channel access derives from parent membership for
+open/read/send/typing/upload/download/AI/unsend/delete. Login/resume and group join
+subscribe to every channel; leave/logout unsubscribe. Creation subscribes online
+members. Group deletion or the last member leaving removes every child channel,
+history, readState, unread count and attachment. Counts and read pointers are per
+channel; the client sums counts for the group rail badge.
+
+Both message_send and file_send accept optional `replyTo`. The id must belong to a
+non-deleted message in that room's retained history; validation occurs before
+storing text or file bytes. The server stores only a snapshot:
+`reply: { id, sender, text, kind }`. Text is an excerpt of at most 120 Unicode
+characters (the filename for an attachment). Unsend replaces matching snapshots
+with `{ id, sender, kind, text: '', deleted: true }`. Clients show
+"Original message was unsent" for those quotes and "Message unsent" for tombstones,
+including previews. AI summaries omit unsent messages.
+
+Mentions are client-rendered text chips, matched case-insensitively against real
+room participants and ai, longest name first (including names with spaces).
+Autocomplete offers group members or the DM peer plus ai; Up/Down, Enter/Tab,
+Escape and click select/dismiss it. Mention badges are client state; they require
+an unread room and a received mention of the current user. Updates do not add
+unread counts. The composer AI menu provides private summaries and inserts @ai;
+AI answers are shared with both DM participants or current channel members.
+Typing bars appear only while people type, above the composer without reserving
+layout height. Typing deliveries exclude the sender in #general, channels and DMs.

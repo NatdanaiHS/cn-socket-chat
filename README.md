@@ -47,13 +47,13 @@ the group, marked offline; Online users includes only connected accounts.
 | --- | --- |
 | R3 unique names | server.js: register handler validates trimmed username, length and case-insensitive uniqueness; public/client.js: login-form handler shows rejection on login screen. |
 | R4 live users | server.js: userList, broadcastLists, login/disconnect handlers; public/client.js: users_update and renderLists mark own name "(you)". |
-| R5 separate rooms | server.js: room_open, directRooms, groups, histories; public/client.js: dmId, openRoom, histories. |
+| R5 separate rooms and text channels | server.js: room_open, directRooms, groups, channels, canAccess, histories; public/client.js: dmId, groupFor, channelList, openRoom, histories. |
 | R6 window and chat box | public/index.html: messages, message-form; public/client.js: renderMessages and message-form handler; public/style.css: message/own/composer layouts. |
 | R7 private delivery | server.js: message_send, requireRoom, canAccess, deliver; target validated by room_open, DM uses only participant socket ids. |
 | R8 group creation | server.js: group_create; creates a Set containing only creator username. |
 | R9 group/member lists | server.js: groupList, broadcastLists; public/client.js: groups_update, renderLists. |
 | R10 self join/leave | server.js: group_join/group_leave accept only roomId; public/client.js: renderLists Join/Leave buttons; no invite/add-member handler. |
-| R11 member-only messages | server.js: canAccess, message_send, deliver, socket.join/socket.leave; group delivery uses io.to(roomId).emit. |
+| R11 member-only group/channel messages | server.js: canAccess, message_send, deliver, socket.join/socket.leave; group delivery uses io.to(roomId).emit. |
 | Disconnect cleanup | server.js: removePresence; removes online presence/typing and broadcasts lists; keeps account memberships and histories. |
 
 The registered socket handlers are intentionally explicit and commented in English.
@@ -66,7 +66,7 @@ See [docs/PROTOCOL.md](docs/PROTOCOL.md) for every event and payload.
 ## Special points and product features
 
 - **AI:** Gemini summarizes the open room privately for the requester. In a group,
-  send @ai Explain TCP for a reply visible only to members. Missing keys, timeouts
+  send @ai Explain TCP for a reply visible only to members. @ai also works in DMs, visible to both participants; the composer sparkles menu is the single entry for Ask AI and private summaries. Missing keys, timeouts
   and upstream errors produce friendly messages.
 - **File sharing:** send any file up to 5 MB using 📎, drag-and-drop or image paste.
   PNG/JPEG/GIF/WebP have thumbnails and a full-size lightbox with Download; other
@@ -80,7 +80,7 @@ See [docs/PROTOCOL.md](docs/PROTOCOL.md) for every event and payload.
   All six accents meet WCAG AA contrast with white text.
 - **Typing and unread:** private typing indicators expire if a stop event is lost.
   Saved unread badges and the browser tab total update as conversations are read.
-- **Chat UI:** Discord-style layout with WongChat’s own W identity: a 72 px joined-group rail, 240 px DM/channel panel with user settings, left-aligned message rows, and a toggleable 240 px member/profile column. Compact follow-ups, date and unread dividers, read receipts, search, emoji, AI tools and private attachments remain available. Below 1024 px the right panel opens as a drawer; below 768 px the 64 px rail and conversation list lead to a full-screen chat with browser Back support. The composer and reserved typing line follow the mobile visual viewport and safe area. Light, dark and system themes use IBM Plex Sans Thai and respect reduced motion.
+- **Chat UI:** Discord-style layout with WongChat’s own W identity: a 72 px joined-group rail, 240 px DM/channel panel with user settings, left-aligned message rows, and a toggleable 240 px member/profile column. Compact follow-ups, date and unread dividers, read receipts, search, emoji, AI tools and private attachments remain available. Below 1024 px the right panel opens as a drawer; below 768 px the 64 px rail and conversation list lead to a full-screen chat with browser Back support. The composer and transient typing bar follow the mobile visual viewport and safe area. Light, dark and system themes use IBM Plex Sans Thai and respect reduced motion.
 - **Cloud deployment:** systemd and Caddy templates support a single persistent
   Node.js service, HTTPS and Socket.IO upgrades. Deployment remains an
   administrator operation; these templates do not deploy the app.
@@ -118,7 +118,7 @@ tokens are never written to the file or logged.
 
 Groups save their creator and member usernames. Disconnect, logout and restart keep
 membership; login/resume subscribes the new socket to all joined groups. Click Leave
-to remove membership; only the last member leaving deletes a group, its history and files.
+to remove membership; only the last member leaving deletes a group, all its channels, histories and files.
 A newly joined member can read existing group history. Member lists show all names
 and mark who is online. Online users lists only currently connected accounts,
 including yourself.
@@ -136,7 +136,7 @@ that group; DM files remain private to the two participants.
 
 ## Tests
 
-Run npm test. Check browser JavaScript syntax with node --check public/client.js. test/smoke.js uses node:assert and socket.io-client, starts an
+Run npm test. Check browser JavaScript syntax with node --check public/client.js. test/features.js additionally covers legacy #general, channel privacy/permissions/subscriptions, reply validation, unsend delivery and file cleanup, DM AI fallback, per-channel unread and restart. test/smoke.js uses node:assert and socket.io-client, starts an
 isolated server on a random loopback port, and closes every socket/server on exit.
 It checks R3–R11, forbidden DM/group/history/typing access, self-only membership,
 history limits, self leave, registration/duplicate names, password rejection,
@@ -171,3 +171,23 @@ deploy/Caddyfile.snippet configures chat.natdanaihs.com to reverse proxy
 service installation and production deployment are separate administrator tasks.
 
 The UI uses IBM Plex Sans Thai with system fallbacks. All chat, profile and attachment data travels through Socket.IO. No build step or new npm dependencies are needed. Enter sends and Shift+Enter adds a line. Unread totals appear in the tab title.
+
+## Text channels and message tools
+
+Each group starts with #general, preserving the existing group history. Any member
+can create extra text channels with the + beside TEXT CHANNELS; only the group
+creator can delete them. Channel names and content are private to members. The
+rail badge totals unread messages across the group's channels.
+
+Type @ to mention a member (names with spaces are supported), or ai. Use Up/Down
+and Enter/Tab, click a suggestion, or Escape to close. Mentions of you highlight
+the message and mark an unread badge with @. The composer sparkles button opens
+one menu for a private summary or Ask AI in DMs and group channels.
+
+Hover or focus a message for Reply, Copy text and Unsend; touch devices have a
+visible more button with the same actions. Reply quotes can scroll to the loaded
+original; Escape or the reply bar's close button cancels a draft reply. Only the
+sender can unsend their chat/file messages. Unsend keeps a placeholder, deletes
+attachment bytes and updates quotes to "Original message was unsent". Existing
+JSON data loads without a migration. Typing appears above the composer only
+while active, with animated dots and reduced-motion support.
