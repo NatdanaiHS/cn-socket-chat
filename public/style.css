@@ -326,10 +326,9 @@ fieldset { border: 0; padding: 0; margin: 0; } legend { margin-bottom: 12px; }
 .message-actions .danger-action,.message-actions .danger-action:hover { color:var(--danger); }
 .message-actions .icon { width:18px; height:18px; }
 .message-row:hover .message-actions,.message-row:focus-within .message-actions,.message-row.actions-open .message-actions { visibility:visible; }
-.message-more { display:none; background:transparent; color:var(--muted); align-self:flex-start; }
 .reply-flash { outline:2px solid var(--accent); outline-offset:-2px; }
 /* Overlay typing above the composer without changing message-list height. */
 .typing { position:absolute; bottom:100%; left:16px; right:16px; height:24px; border-radius:6px 6px 0 0; background:var(--side); opacity:0; transform:translateY(4px); transition:opacity .15s,transform .15s; pointer-events:none; }
 .typing.is-visible { opacity:1; transform:translateY(0); }
-@media (hover:none) { .message-more { display:flex; } .message-row:hover .message-actions { visibility:hidden; } .message-row:focus-within .message-actions,.message-row.actions-open .message-actions { visibility:visible; } .message-actions { top:0; right:48px; } .message-actions button { min-height:44px; } }
+@media (hover:none) { .message-row { -webkit-touch-callout:none; -webkit-user-select:none; user-select:none; } .message-row:hover .message-actions,.message-row:focus-within .message-actions { visibility:hidden; } .message-row.actions-open .message-actions { visibility:visible; } .message-row.actions-open { background:var(--input); } .message-actions { top:-22px; right:8px; } .message-actions button { min-width:44px; min-height:44px; } }
 @media (prefers-reduced-motion:reduce) { .typing { transition:none; } }

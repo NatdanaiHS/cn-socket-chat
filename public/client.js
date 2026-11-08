@@ -28,6 +28,7 @@ function icon(name) {
     image: ['M3 3h18v18H3Z','m3 17 6-6 4 4 3-3 5 5M8 7h.01'],
     file: ['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M8 13h8M8 17h5'],
     download: ['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4','m7 10 5 5 5-5','M12 15V3'],
+    arrowDown: ['M12 5v14','m19 12-7 7-7-7'],
     sun: ['M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z','M12 2v2','M12 20v2','m4.93 4.93 1.41 1.41','m17.66 17.66 1.41 1.41','M2 12h2','M20 12h2','m6.34 17.66-1.41 1.41','m19.07 4.93-1.41 1.41'],
     moon: ['M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z'],
     monitor: ['M3 3h18v14H3ZM8 21h8M12 17v4'],
@@ -60,7 +61,7 @@ document.querySelectorAll('[data-icon]').forEach(node => node.replaceChildren(ic
 for (const [id, name] of Object.entries({ 'back-button': 'back', 'attach-button': 'plus', 'emoji-button': 'smile', 'ai-button': 'sparkles', 'password-toggle': 'eye' })) $(id).replaceChildren(icon(name));
 document.querySelectorAll('[data-close]').forEach(node => node.replaceChildren(icon('close')));
 document.querySelectorAll('[data-theme-choice]').forEach(node => node.replaceChildren(icon({light:'sun',dark:'moon',system:'monitor'}[node.dataset.themeChoice])));
-$('new-messages').replaceChildren(icon('download'), document.createTextNode('New messages'));
+$('new-messages').replaceChildren(icon('arrowDown'),document.createTextNode('New messages'));
 const backUnread = document.createElement('span'); backUnread.id = 'back-unread'; backUnread.className = 'badge'; backUnread.hidden = true; $('back-button').append(backUnread);
 let firstUnreadId = null, typingExpiryTimer, typingSignature = '', bannerTimer;
 let notificationsEnabled = false;
@@ -257,17 +258,30 @@ function addMessageActions(row, message) {
   if (message.deleted || message.kind === 'system') return;
   row.tabIndex = 0; row.setAttribute('aria-label', 'Message from ' + message.sender);
   const bar = element('div', 'message-actions'); bar.setAttribute('role', 'toolbar'); bar.setAttribute('aria-label', 'Message actions');
-  const action = (label, glyph, run) => { const button = element('button', label === 'Unsend' ? 'danger-action' : ''); button.type = 'button'; button.title = label; button.setAttribute('aria-label', label); button.append(icon(glyph)); button.onclick = () => { row.classList.remove('actions-open'); more.setAttribute('aria-expanded', 'false'); run(); }; bar.append(button); };
+  const action = (label, glyph, run) => { const button = element('button', label === 'Unsend' ? 'danger-action' : ''); button.type = 'button'; button.title = label; button.setAttribute('aria-label', label); button.append(icon(glyph)); button.onclick = () => { row.classList.remove('actions-open'); run(); }; bar.append(button); };
   action('Reply', 'reply', () => startReply(message));
   action('Copy text', 'copy', async () => { try { await navigator.clipboard.writeText(message.text || message.file?.name || ''); } catch { toast('Could not copy text.', true); } });
   if (message.sender === myName && ['chat', 'file'].includes(message.kind)) action('Unsend', 'trash', async () => {
     if (!await confirmAction({ title: 'Unsend message?', body: 'Everyone will see Message unsent.', confirmLabel: 'Unsend' })) return;
     try { await request('message_unsend', { roomId: message.roomId, messageId: message.id }); } catch (error) { showError(error); }
   });
-  const more = element('button', 'message-more icon-button', '⋯'); more.type = 'button'; more.setAttribute('aria-label', 'Message actions'); more.setAttribute('aria-expanded', 'false');
-  more.onclick = () => { const open = row.classList.toggle('actions-open'); more.setAttribute('aria-expanded', String(open)); if (open) bar.querySelector('button').focus(); };
-  row.append(bar, more);
+  row.append(bar);
+  // Touch screens have no hover: a long press (like LINE/Discord mobile) opens the toolbar.
+  let pressTimer;
+  row.addEventListener('touchstart', event => {
+    if (event.touches.length !== 1 || event.target.closest('button, a, input, textarea')) return;
+    pressTimer = setTimeout(() => {
+      for (const open of document.querySelectorAll('.message-row.actions-open')) open.classList.remove('actions-open');
+      row.classList.add('actions-open'); navigator.vibrate?.(10);
+    }, 450);
+  }, { passive: true });
+  for (const type of ['touchend', 'touchmove', 'touchcancel']) row.addEventListener(type, () => clearTimeout(pressTimer), { passive: true });
+  row.addEventListener('contextmenu', event => { if (matchMedia('(hover: none)').matches) event.preventDefault(); });
 }
+// Tapping anywhere outside an open toolbar closes it.
+document.addEventListener('pointerdown', event => {
+  for (const open of document.querySelectorAll('.message-row.actions-open')) if (!open.contains(event.target)) open.classList.remove('actions-open');
+});
 
 let contextVisible = matchMedia('(min-width: 1024px)').matches;
 function setContext(visible) {
