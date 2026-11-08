@@ -16,8 +16,9 @@ if [ "$MODE" = keep-accounts ]; then
 else
   echo "This deletes EVERYTHING: accounts, groups, channels, DMs, messages and files."
 fi
-read -r -p "Type RESET to continue: " answer
-[ "$answer" = RESET ] || { echo "Cancelled. Nothing was changed."; exit 1; }
+answer=""
+read -r -p "Type RESET to continue: " answer < /dev/tty || true
+[ "${answer//$'\r'/}" = RESET ] || { echo "Cancelled. Nothing was changed."; exit 1; }
 
 TS="$(date +%Y%m%d-%H%M%S)"
 BACKUP="/var/lib/cn-chat-reset-backup-$TS"
